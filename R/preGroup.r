@@ -4,6 +4,7 @@ require(glmnet)
 require(pre)
 require(mvs)
 require(Formula)
+require(survival)
 # utils::globalVariables("%dopar%")
 
 # Problems with calling pre directly (tree.control is not defined). 
@@ -19,13 +20,14 @@ preGroup <- function(formula, data,  treatment_indicator, family = "gaussian", a
                 removecomplements = TRUE, removeduplicates = TRUE, 
                 verbose = FALSE, par.init = FALSE, par.final = FALSE, 
                 sparse = FALSE, ...) {
-                    
 
-    # Check if the data is of type data.frame(
-    if (!is.data.frame(data)) {
-        stop("Argument 'data' must be of type data.frame")
-    }
-
+  #####################
+  ## Check arguments ##
+  #####################
+  
+  ## Save call:
+  cl <- match.call()
+  
   ## Check if proper formula argument is specified 
   if (!(inherits(formula, "formula"))) {
     stop("Argument formula should specify and object of class 'formula'.\n")
@@ -233,6 +235,221 @@ preGroup <- function(formula, data,  treatment_indicator, family = "gaussian", a
   if (!tree.unbiased && !use.grad && learnrate > 0) {
     stop("Employing the rpart algorithm with a learnrate > 0 without gradient boosting is not supported.\n")
   }
+  
+  
+  ######################################
+  ## Prepare data, formula and family ##
+  ######################################
+
+  if (!is.null(tree.control$cluster)) {
+    ## If cluster variable has been specified, make sure it is included in data 
+    if (!inherits(tree.control$cluster, "name")) 
+      warning("A cluster argument was passed to argument tree.control, but it is not a name, so it might be ignored. ")
+    cluster <- data[ , as.character(tree.control$cluster)]
+  }
+  
+  ## prepare model frame:
+  data <- model.frame(Formula::as.Formula(formula), data = data, na.action = NULL)
+  if (!is.null(tree.control$cluster)) {
+    ## If cluster variable has been specified, make sure it is included in data 
+    data[ , as.character(tree.control$cluster)] <- cluster
+  }
+
+
+  ## Coerce character and logical variables to factors:
+  if (any(char_names <- sapply(data, is.character))) {
+    char_names <- names(data)[char_names]
+    warning("The following variables were of class 'character' and will be coerced to 'factor': ", paste(char_names, collapse = " "), "\n")
+    data[ , char_names] <- sapply(data[ , char_names], factor)
+  }
+  if (any(logic_names <- sapply(data, is.logical))) {
+    logic_names <- names(data)[logic_names]
+    warning("The following variables were of class 'logical' and will be coerced to 'factor': ", paste(logic_names, collapse = " "), "\n")
+    data[ , logic_names] <- sapply(data[ , logic_names], factor)
+  } 
+  
+  ## get response variable name(s):
+  y_names <- names(data)[attr(attr(data, "terms"), "response")]
+  if (family == "mgaussian" || length(y_names) == 0) {
+    y_names <- attr(terms(Formula(formula), rhs = 0, data = data), "term.labels")
+    family <- "mgaussian"
+  }
+  
+  ## get predictor variable names:
+  if (family == "cox" || is.Surv(data[ , y_names])) {
+    x_names <- attr(attr(data, "terms"), "term.labels")
+  } else {
+    x_names <- attr(terms(Formula(formula), lhs = 0, data = data), "term.labels")
+  }
+  
+  ## Coerce ordered categorical variables to numeric:
+  if (ordinal) {
+    if (any(ord_var_inds <- sapply(data[ , x_names], is.ordered))) {
+      data[ , ord_var_inds] <- sapply(data[ , ord_var_inds], as.numeric)
+    }
+  }
+  
+  ## expand dot and put ticks around variables within functions, if present:
+  if (family != "mgaussian") {
+    formula <- formula(data)
+  } else {
+    formula <- Formula(formula(paste0(
+      paste0(paste0("`", y_names, "`"), collapse = " + "), 
+      " ~ ", 
+      paste0(paste0("`", x_names, "`"), collapse = " + "))))
+  }
+
+  ## get sample size:
+  n <- nrow(data)
+
+  ## check and set correct family:
+  if (is.null(cl$family)) {
+    if (length(y_names) == 1L) {
+      if (is.factor(data[ , y_names])) { # then family should be bi- or multinomial
+        if (is.ordered(data[ , y_names])) {
+          warning("An ordered factor was specified as the response variable, which will be treated as an unordered factor response.")
+          data[ , y_names] <- factor(data[ , y_names], ordered = FALSE)
+        } 
+        if (nlevels(data[ , y_names]) == 2L) {
+            family <- "binomial"
+        } else if (nlevels(data[ , y_names]) > 2L) {
+            family <- "multinomial"
+          }
+      } else if (is.Surv(data[ , y_names])) { # then family should be cox
+        family <- "cox"
+      } else if (!is.numeric(data[ , y_names])) { # then response is not a factor, survival or numeric
+        warning("The response variable specified through argument formula should be of class numeric, factor or Surv.")
+      }
+    } else if (length(y_names) > 1L) { # multiple responses specified, should be numeric
+      if (all(sapply(data[ , y_names], is.numeric))) {
+        family <- "mgaussian"
+      } else {
+        warning("Multiple response variables were specified, but not all were (but should be) numeric.\n")
+      }
+    }
+    
+  } else { # family was specified, check if correct;
+    
+    if (family[1L] == "gaussian") {
+      if (length(y_names) > 1L) {
+        warning("Argument family was set to 'gaussian', but multiple response variables were specified in formula. Consider specifying family = 'mggaussian'?\n")        
+      }
+      if (!is.numeric(data[ , y_names])) { # then family should be poisson or gaussian
+        warning("Argument family was set to 'gaussian', but the response variable specified in formula is not of class numeric.\n")
+      }
+    } else if (family[1L] == "poisson") {
+      if (length(y_names) > 1L) {
+        warning("Argument family was set to 'poisson', but multiple response variables were specified, which is not supported.\n")
+      }
+      if (!isTRUE(all.equal(round(data[ , y_names]), data[ , y_names]))) {
+        warning("Argument family' was set to 'poisson', but the response variable specified in formula is non-integer.\n")
+      }
+    } else if (family[1L] == "multinomial") {
+      if (length(y_names) > 1L) {
+        warning("Argument family was set to 'multinomial', but multiple response variables were specified in formula, which is not supported. Check specified response variable (should be a single factor with > 2 levels) and family.\n")        
+      }
+      if (!is.factor(data[ , y_names])) {
+        warning("Argument family was set to 'multinomial', but response variable is numeric. Response variable will be converted to factor.")
+        data[ , y_names] <- factor(data[ , y_names])
+      }  
+    } else if (family[1L] == "binomial") {
+      if (length(y_names) > 1L) {
+        warning("Argument family was set to 'binomial', but multiple response variables were specified, which is not supported.\n")
+      } else if (!is.factor(data[ , y_names])) {
+        warning("Argument family was set to 'binomial', but the response variable specified is not a factor.\n")
+      } else if (is.ordered(data[ , y_names])) {
+        warning("Argument family was set to 'binomial', but the response variable specified is an ordered factor. It will be treated as an unordered factor.")
+      } else if (nlevels(data[ , y_names]) != 2L) {
+        warning("Argument family was set to 'binomial', but the response variable has ", nlevels(data[ , y_names]), " levels.\n")        
+      }
+    } else if (family[1L] == "multinomial") {
+      if (length(y_names) > 1L) {
+        warning("Argument family was set to 'multinomial', but multiple response variables were specified, which is not supported.\n")
+      } else if (!is.factor(data[ , y_names])) {
+        warning("Argument family was set to 'multinomial', but the response variable specified is not a factor.\n")
+      } else if (is.ordered(data[ , y_names])) {
+        warning("Argument family was set to 'multinomial', but the response variable specified is an ordered factor. It will be treated as an unordered factor.")
+      } else if (nlevels(data[ , y_names]) < 3L) {
+        warning("Argument family was set to 'multinomial', but the response variable has ", nlevels(data[ , y_names]), " levels.\n")
+      }
+    } else if (family[1L] == "cox") {
+      if (length(y_names) > 1L) {
+        warning("Argument family was set to 'cox', but multiple response variables were specified, which is not supported.\n")
+      } else if (!is.Surv(data[ , y_names])) {
+        warning("Argument family was set to 'cox', but the response variable specified is not of class Surv.\n")
+      }
+    } else if (family == "mgaussian") {
+      if (length(y_names) == 1L) {
+        warning("Argument family was set to 'mgaussian', but only a single response variable was specified.\n")
+      } else if (!all(sapply(data[ , y_names], is.numeric))) {
+        warning("Argument family was set to 'mgaussian', but not all response variables specified are numeric.\n")
+      }
+    }
+  }
+
+  ## Check specification of tree growing algorithms employed:
+  if (!tree.unbiased) { # rpart is employed
+    if (family == "mgaussian") {
+      stop("Employing rpart algorithm for rule induction with a multivariate response variable is not supported. Specify tree.unbiased = TRUE and use.grad = FALSE.\n")
+    } else if (learnrate > 0 && family == "multinomial") {
+      stop("Employing rpart algorithm for rule induction with a multinomial response variable and learnrate > 0 is not supported. Specify learnrate = 1, or tree.unbiased = TRUE and use.grad = TRUE.\n")
+    }
+  } else if (!use.grad) { # (g)lmtree is employed
+    if (family == "multinomial") {
+      stop("Employing (g)lmtree for rule induction with a multinomial response variable is not supported. Specify use.grad = TRUE for multivariate responses.\n")
+    } else if (family == "mgaussian") {
+      stop("Employing (g)lmtree for rule induction with a multivariate response variable is not supported. Specify use.grad = TRUE for multivariate responses.\n")
+    } else if (family == "cox") {
+      stop("Employing (g)lmertree for rule induction with a survival response is not supported. Specify use.grad = TRUE for a survival response.\n")
+    }
+  }
+  
+  if (family == "cox") {
+    if (!requireNamespace("survival", quietly = TRUE)) {
+      stop("For fitting a prediction rule ensemble with a survival response, package survival should be installed and loaded.\n")    
+    }
+    if (learnrate > 0) {
+      if (!requireNamespace("mboost", quietly = TRUE)) {
+        stop("For fitting a prediction rule ensemble with a survival response and learning rate > 0, package mboost should be installed.\n")
+      }
+    }
+  }
+
+  ## Prevent response from being interpreted as count by ctree or rpart:
+  if (learnrate == 0 && family == "gaussian" && (!(tree.unbiased && !use.grad))) { # if glmtree is not employed
+    if (isTRUE(all.equal(round(data[ ,  y_names]), data[ ,  y_names]))) { # if response passes integer test
+      data[ ,  y_names] <- data[ ,  y_names] + 0.01 # add small constant to response to prevent response being interpreted as count by ctree or rpart
+      small_constant_added <- 0.01
+    } else {
+      small_constant_added <- FALSE
+    }
+  } else {
+    small_constant_added <- FALSE
+  }
+
+  if (any(is.na(data))) {
+    weights <- weights[complete.cases(data)]
+    data <- data[complete.cases(data),]
+    n <- nrow(data)
+    warning("Some observations have missing values and have been removed from the data. New sample size is ", n, ".\n", immediate. = TRUE)
+  }
+
+  if (verbose) {
+    if (family == "gaussian") {
+      cat("\nA rule ensemble for prediction of a continuous response will be created.\n")
+    } else if (family == "poisson") {     
+      cat("\nA rule ensemble for prediction of a count response will be created.\n")
+    } else if (family == "binomial") {
+      cat("\nA rule ensemble for prediction of a binary categorical response will be created.\n")
+    } else if (family == "multinomial") {
+      cat("\nA rule ensemble for prediction of a multinomial response will be created.\n")
+    } else if (family == "mgaussian") {
+      cat("\nA rule ensemble for prediction of a multivariate continuous response will be created.\n")
+    } else if (family == "cox") {
+      cat("\nA rule ensemble for prediction of a survival response will be created.\n")
+    }
+  }
+  
     # fit the pre funtion, fit.final = FALSE
     pre_fit <- pre(formula = formula, data = data, fit.final = FALSE, family = family, ad.alpha = ad.alpha, 
                ad.penalty = ad.penalty, use.grad = use.grad, weights = weights, type = type, sampfrac = sampfrac, 
@@ -246,20 +463,43 @@ preGroup <- function(formula, data,  treatment_indicator, family = "gaussian", a
     
     # MVS only support numeric group ids
     group_id <- make_group_id(pre_fit, treatment_indicator)
-    mvs_fit <- MVS(x = as.matrix(pre_fit$modmat), y = pre_fit$data[, 1], alpha = c(1,0), nnc = c(0,1),
-               view = as.matrix(group_id), family = family, cvloss = "mse")
-    
-    # now convert the group id to meaningful rule types
-    rule_type <- c("Intercept", group_id)
-    rule_type[rule_type == 1] <- "linear"
-    rule_type[rule_type == 2] <- "prognostic"
-    rule_type[rule_type == 3] <- "prescriptive"
-    
-    result <- list(mvs_fit = mvs_fit, pre_fit = pre_fit, call = match.call(), rule_type = rule_type)
 
-  
-  class(result) <- "preGroup"
-  return(result)
+    if(min(table(group_id)) >= 2) {
+
+      y_var <- if(family == "binomial") {
+          as.factor(pre_fit$data[, 1])
+      } else {
+          pre_fit$data[, 1]
+      }
+
+      mvs_fit <- MVS(x = as.matrix(pre_fit$modmat), y = y_var, alpha = c(1,0), nnc = c(0,1),
+                view = as.matrix(group_id), family = family, cvloss = "mse")
+      
+      # now convert the group id to meaningful rule types
+      rule_type <- c("Intercept", group_id)
+
+      rule_type[rule_type == 1] <- "linear"
+      rule_type[rule_type == 2] <- "prognostic"
+      rule_type[rule_type == 3] <- "prescriptive"
+      
+      result <- list(mvs_fit = mvs_fit, pre_fit = pre_fit, call = match.call(), rule_type = rule_type)
+
+        class(result) <- "preGroup"
+        return(result)
+
+    } else {
+      warning("The mininum number of linear terms / prognostic rules / prescriptive terms is less than 2. The preGroup model cannot be fitted. The pre model will be fitted.")
+
+      return(pre(formula = formula, data = data, family = family, ad.alpha = ad.alpha, 
+               ad.penalty = ad.penalty, use.grad = use.grad, weights = weights, type = type, sampfrac = sampfrac, 
+               maxdepth = maxdepth, learnrate = learnrate, mtry = mtry, ntrees = ntrees,
+               confirmatory = confirmatory, singleconditions = singleconditions,
+               winsfrac = winsfrac, normalize = normalize, standardize = standardize,
+               ordinal = ordinal, nfolds = nfolds, tree.control = tree.control, tree.unbiased = tree.unbiased, 
+               removecomplements = removecomplements, removeduplicates = removeduplicates, 
+               verbose = verbose, par.init = par.init, par.final = par.final, 
+               sparse = sparse,  ...))
+    }
 }
 
 # rules is a vector comes from pre_model$rules$description
@@ -296,9 +536,9 @@ make_group_id <- function(pre_model, treatment_indicator) {
     column_names <- colnames(pre_model$modmat)
     rule_presence <- sapply(column_names, function(x) grepl("rule", x))
     # Finally, sum the TRUE values to get the count of column names containing "rule"
-    rule_count <- sum(!rule_presence)
+    linear_count <- sum(!rule_presence)
 
-    group_ids <- c(rep(1, rule_count), split_treatment_indicator_rule(pre_model$rules$description, treatment_indicator))
+    group_ids <- c(rep(1, linear_count), split_treatment_indicator_rule(pre_model$rules$description, treatment_indicator))
 
 }
 
@@ -336,12 +576,12 @@ coef.preGroup <- function(preGroup_model, ...) {
         
         # print(length(x_names))
         # print(length(x_coefs))
-        subgroup_coef <- cbind(rule = x_names, coefficients = x_coefs)
+        subgroup_coef <- cbind(rule = x_names, coefficient = x_coefs)
 
         coefs <- as.data.frame(rbind(coefs, subgroup_coef))
 
     }
-    grand_intercept <- cbind(rule = "(Intercept)", coefficients = as.numeric(grand_intercept))
+    grand_intercept <- cbind(rule = "(Intercept)", coefficient = as.numeric(grand_intercept))
 
     coefs <- rbind(grand_intercept, coefs)
 
@@ -362,7 +602,7 @@ coef.preGroup <- function(preGroup_model, ...) {
     # Remove the helper column
     coefs$na_originally <- NULL
 
-    coefs$coefficients <- as.numeric(coefs$coefficients)
+    coefs$coefficient <- as.numeric(coefs$coefficient)
 
     return(coefs)
 }
@@ -385,30 +625,32 @@ predict.preGroup <- function(preGroup_model, newdata, ...) {
 
 get_new_X <- function(preGroup_model, new_data) {
 
-    object <- preGroup_model$pre_fit
-    newdata <- get_modmat(
-      wins_points = object$wins_points, 
-      x_scales = object$x_scales, 
-      formula = object$formula, 
+    pre_model <- preGroup_model$pre_fit
+
+    # get_modmat returns a list instead of the matrix
+    new_modlist <- get_modmat(
+      wins_points = pre_model$wins_points, 
+      x_scales = pre_model$x_scales, 
+      formula = pre_model$formula, 
       data = new_data, 
-      rules = if (object$type == "linear" || is.null(object$rules)) {NULL} else {
-        structure(object$rules$description, names = object$rules$rule)}, 
-      type = object$type, 
-      winsfrac = if (is.null(object$winsfrac)) {
+      rules = if (pre_model$type == "linear" || is.null(pre_model$rules)) {NULL} else {
+        structure(pre_model$rules$description, names = pre_model$rules$rule)}, 
+      type = pre_model$type, 
+      winsfrac = if (is.null(pre_model$winsfrac)) {
         formals(pre)$winsfrac
       } else {
-        object$winsfrac
+        pre_model$winsfrac
       },
-      x_names = object$x_names, 
-      normalize = object$normalize,
+      x_names = pre_model$x_names, 
+      normalize = pre_model$normalize,
       y_names = NULL,
       confirmatory = tryCatch(
-          eval(object$call$confirmatory),
+          eval(pre_model$call$confirmatory),
           error = function(e) NULL
       )
     )
     
-    return(newdata$x)
+    return(new_modlist$x)
 }
 
 get_modmat <- function(
@@ -621,7 +863,7 @@ get_modmat <- function(
 }
 
 
-importance.preGroup <- function(x, standardize = FALSE, global = TRUE,
+importance.preGroup <- function(preGroup_model, standardize = FALSE, global = TRUE,
                            penalty.par.val = "lambda.1se", gamma = NULL,
                            quantprobs = c(.75, 1),
                            round = NA, plot = TRUE, ylab = "Importance",
@@ -630,10 +872,12 @@ importance.preGroup <- function(x, standardize = FALSE, global = TRUE,
                            cex.axis = 1, legend = "topright", ...)
 {
 
-  if (!inherits(x, what = "preGroup")) {
+  if (!inherits(preGroup_model, what = "preGroup")) {
     stop("Specified object is not of class 'preGroup'.")
   }
   
+  x <- preGroup_model$pre_fit
+
   if (!global) {
     if (x$family %in% c("mgaussian", "multinomial")) {
       warning("Local importances cannot be calculated for multivariate and multinomial outcomes. Global importances will be returned.")
@@ -650,9 +894,9 @@ importance.preGroup <- function(x, standardize = FALSE, global = TRUE,
   
   ## get coefficients:
   if (is.null(gamma)) {
-    coefs <- coef(x, penalty.par.val = penalty.par.val)
+    coefs <- coef(preGroup_model, penalty.par.val = penalty.par.val)
   } else {
-    coefs <- coef(x, penalty.par.val = penalty.par.val, gamma = gamma)    
+    coefs <- coef(preGroup_model, penalty.par.val = penalty.par.val, gamma = gamma)    
   }
   if (x$family %in% c("mgaussian", "multinomial")) {
     # Returns the y variable names
@@ -847,13 +1091,14 @@ importance.preGroup <- function(x, standardize = FALSE, global = TRUE,
     }
     
     if (x$family %in% c("mgaussian","multinomial")) {
-      keep <- c("rule", "description", gsub("coefficient", "importance", coef_inds), 
+      keep <- c("rule", "description", gsub("coefficient", "importance", coef_inds), "rule_type", 
                 coef_inds, "sd")
     } else {
-      keep <- c("rule", "description", "imp", "coefficient", "sd")
+      keep <- c("rule", "description", "imp", "coefficient", "sd", "rule_type")
     }
-    
+
     baseimps <- data.frame(baseimps[, keep], stringsAsFactors = FALSE)
+
     row.names(baseimps) <- row.names(varimps) <- NULL
     ## Remove added space AFTER description if winsorizing was performed
     if (!is.null(x$call$winsfrac)) {
@@ -968,15 +1213,18 @@ create_importance_matrix <- function(imp) {
     importance_matrix["linear", var] <- linear_imps[imp$varimps$varname == var]
     
     # Second value: sum of baseimps$imp for rules containing the varname and "prognostic"
-    prognostic_sum <- sum(imp$baseimps$imp[grepl(var, imp$baseimps$rule) & grepl("prognostic", imp$baseimps$rule)])
+    prognostic_sum <- sum(imp$baseimps$imp[grepl(var, imp$baseimps$description) & grepl("prognostic", imp$baseimps$rule_type)])
     importance_matrix["prognostic", var] <- prognostic_sum
     
     # Third value: sum of baseimps$imp for rules containing the varname and "prescriptive"
-    prescriptive_sum <- sum(imp$baseimps$imp[grepl(var, imp$baseimps$rule) & grepl("prescriptive", imp$baseimps$rule)])
+    prescriptive_sum <- sum(imp$baseimps$imp[grepl(var, imp$baseimps$description) & grepl("prescriptive", imp$baseimps$rule_type)])
     importance_matrix["prescriptive", var] <- prescriptive_sum
   }
 
-  return(importance_matrix)
+  overall_importance <- colSums(importance_matrix)
+  sorted_importance_matrix <- importance_matrix[, order(overall_importance, decreasing = TRUE)]
+
+  return(sorted_importance_matrix)
 }
 
 create_importance_matrix_multivariate <- function(imp) {
@@ -1004,11 +1252,11 @@ create_importance_matrix_multivariate <- function(imp) {
       importance_matrix["linear", var] <- linear_imps[imp$varimps$varname == var]
 
       # Second value: sum of baseimps$imp for rules containing the varname and "prognostic" for the current response
-      prognostic_sum <- sum(imp$baseimps[[paste0("importance.", response)]][grepl(var, imp$baseimps$rule) & grepl("prognostic", imp$baseimps$rule)])
+      prognostic_sum <- sum(imp$baseimps$imp[grepl(var, imp$baseimps$description) & grepl("prognostic", imp$baseimps$rule_type)])
       importance_matrix["prognostic", var] <- prognostic_sum
 
       # Third value: sum of baseimps$imp for rules containing the varname and "prescriptive" for the current response
-      prescriptive_sum <- sum(imp$baseimps[[paste0("importance.", response)]][grepl(var, imp$baseimps$rule) & grepl("prescriptive", imp$baseimps$rule)])
+      prescriptive_sum <- sum(imp$baseimps$imp[grepl(var, imp$baseimps$description) & grepl("prescriptive", imp$baseimps$rule_type)])
       importance_matrix["prescriptive", var] <- prescriptive_sum
     }
 

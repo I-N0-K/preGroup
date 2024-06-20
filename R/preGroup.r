@@ -7,8 +7,56 @@ require(Formula)
 require(survival)
 # utils::globalVariables("%dopar%")
 
-# Problems with calling pre directly (tree.control is not defined). 
-# the new problem is that the checking procedure is duplicated twice.
+#' Pre-Group Function for Building Ensemble Models
+#'
+#' This function facilitates the creation of ensemble models by grouping data based on 
+#' treatment indicators and other factors. It allows for various configurations and customizations
+#' to tailor the model fitting process to specific needs, including handling of different 
+#' statistical family distributions.
+#'
+#' @param formula an object of class 'formula' describing the model to be fitted.
+#' @param data a data frame containing the variables specified in the formula.
+#' @param treatment_indicator a character string specifying the column used for treatment division.
+#' @param family a description of the error distribution to be used in the model. It can be one 
+#'        of 'gaussian', 'binomial', etc.
+#' @param ad.alpha optional alpha parameter for adjustment.
+#' @param ad.penalty the penalty type to be used in adjustment, default is 'lambda.min'.
+#' @param use.grad logical, indicating whether to use gradients.
+#' @param weights an optional vector of 'weights' to be used in the fitting process.
+#' @param type the type of model components to include: 'rules', 'linear', or 'both'.
+#' @param sampfrac the fraction of the data to be used in each bootstrap sample.
+#' @param maxdepth maximum depth of the trees in the model.
+#' @param learnrate learning rate for boosting.
+#' @param mtry number of variables randomly sampled as candidates at each split.
+#' @param ntrees number of trees to grow.
+#' @param confirmatory optional vector of confirmatory conditions.
+#' @param singleconditions logical, to include only single conditions in rules.
+#' @param winsfrac the fraction of extreme values to winsorize.
+#' @param normalize logical, whether to normalize predictor variables.
+#' @param standardize logical, whether to standardize predictor variables.
+#' @param ordinal logical, to treat ordered factors as numeric.
+#' @param nfolds number of folds for cross-validation.
+#' @param tree.control list of control parameters for tree construction.
+#' @param tree.unbiased logical, indicating whether to use unbiased trees.
+#' @param removecomplements logical, whether to remove complement rules.
+#' @param removeduplicates logical, whether to remove duplicate rules.
+#' @param verbose logical, indicating whether to print detailed output during fitting.
+#' @param par.init logical, indicating whether to parallelize the initial fit.
+#' @param par.final logical, indicating whether to parallelize the final model fitting.
+#' @param sparse logical, to use sparse model matrices.
+#' @param ... additional arguments affecting the model fitting.
+#'
+#' @return A list containing the fitted model object, the original call, and a classification 
+#'         of the model rules into types such as 'linear', 'prognostic', and 'prescriptive'.
+#'
+#' @examples
+#' \dontrun{
+#'  data(iris)
+#'  result <- preGroup(Species ~ ., data = iris, treatment_indicator = "Petal.Width")
+#'  print(result)
+#' }
+#'
+#' @export
 
 preGroup <- function(formula, data,  treatment_indicator, family = "gaussian", ad.alpha = NA, 
                 ad.penalty = "lambda.min",
@@ -21,435 +69,6 @@ preGroup <- function(formula, data,  treatment_indicator, family = "gaussian", a
                 verbose = FALSE, par.init = FALSE, par.final = FALSE, 
                 sparse = FALSE, ...) {
 
-  #####################
-  ## Check arguments ##
-  #####################
-  
-  ## Save call:
-  cl <- match.call()
-  
-  ## Check if proper formula argument is specified 
-  if (!(inherits(formula, "formula"))) {
-    stop("Argument formula should specify and object of class 'formula'.\n")
-  }
-  ## Check if dot and functions are simultaneously used in formula
-  form <- as.character(formula[3])
-  for (i in names(data)) {
-    form <- gsub(pattern = i, replacement = "", x = form)
-  }
-  if (any(grepl(".", form, fixed = TRUE))) {
-    if (any(grepl("(", form, fixed = TRUE))) {
-      if (any(grepl(")", form, fixed = TRUE))) {
-        warning("Argument formula contains both one or more functions of predictor variables, as well as a dot ('.'), which should be avoided. Model fitting may fail, and/or both the original variable(s) and their functions may be included as predictor variables.\n", immediate. = TRUE)  
-      }
-    }
-  }
-  if (any(grepl("-", as.character(formula), fixed = TRUE))) {
-    warning("Argument formula contains a minus sign. Note that the minus sign should not be used to omit the intercept or variables from the ensemble. To omit the intercept from the final ensemble, specify intercept = FALSE\n", immediate. = TRUE)
-  }
-
-  ## Check if proper data argument is specified:
-  if (!is.data.frame(data)) {
-    stop("Argument data should specify a data frame.\n")
-  }
-
-  ## Check and set up family argument: 
-  if (length(family) > 1L) {
-    warning("Argument family has length > 1, only first element will be used.\n")
-    family <- family[1L]
-  }
-  if (is.function(family)) { 
-    family <- family()
-    if (inherits(family, "family")) {
-      link <- family$link
-      family <- family$family
-      if (family == "gaussian" && link != "identity") {
-        warning("The link function specified is currently not supported; identity link will be employed.\n", immediate. = TRUE)
-      } else if (family == "binomial" && link != "logit") {
-        warning("The link function specified is currently not supported; logit link will be employed.\n", immediate. = TRUE)
-      } else if (family == "poisson" && link != "log") {
-        warning("The link function specified is currently not supported; log link will be employed.\n", immediate. = TRUE)
-      }
-    } else {
-      stop("Argument family should specify a family object.\n")
-    }
-  }
-  if (is.character(family)) {
-    if (!(family %in% c("gaussian", "binomial", "poisson", "mgaussian", "multinomial", "cox"))) {
-      stop("Argument family should be equal to 'gaussian', 'binomial', 'poisson', 'multinomial', 'mgaussian', 'cox', or a corresponding family object.\n")
-    }
-  } else {
-    stop("Argument family should be equal to 'gaussian', 'binomial', 'poisson', 'multinomial', 'mgaussian', 'cox', or a corresponding family object.\n")
-  }
-  
-  ## Check if proper weights argument is specified, if specified:
-  if (missing(weights)) {
-    weights <- rep(1L, times = nrow(data))
-  } else {
-    if (!is.numeric(weights)) {
-      warning("Argument weights should, but does not specify a vector of numeric values.\n", immediate. = TRUE)
-    }
-    if (length(weights) != nrow(data)) {
-      warning("Length of argument weights should be, but is not equal to nrow(data).\n", immediate. = TRUE)
-    }
-    if (!all(weights > 0)) {
-      warning("All weights should be positive but some are not.\n", immediate. = TRUE)
-    }
-  }
-  
-  ## Check if proper type argument is specified:
-  if (!(length(type) == 1L && type %in% c("rules", "both", "linear"))) {
-    stop("Argument type should be 'rules', 'linear' or 'both'.\n")
-  }
-  
-  ## Check if proper sampfrac argument is specified:
-  if (!is.function(sampfrac)) {
-    if (!(length(sampfrac) == 1 && is.numeric(sampfrac) && sampfrac > 0 && 
-          sampfrac <= 1)) {
-      stop("Argument sampfrac should be a single numeric value > 0 and <= 1, or a sampling function.\n")
-    }
-  }
-
-  ## Check if proper maxdepth argument is specified:
-  if (is.function(maxdepth)) {
-    maxdepth <- maxdepth(ntrees = ntrees)
-  } else if (!is.numeric(maxdepth)) {
-    stop("Argument maxdepth should be either a numeric vector of length 1 or ntrees, or a random number generating function.\n")
-  } else if (!(length(maxdepth) %in% c(1L, ntrees))) {
-    warning("Argument maxdepth should be either a numeric vector of length 1 or ntrees, only first value of maxdepth will be used.\n")
-    maxdepth <- maxdepth[1L]
-  } 
-  if (!all(maxdepth > 0)) {
-    stop("All values of maxdepth should be > 0.\n")
-  } 
-  if (!all(maxdepth == suppressWarnings(as.integer(maxdepth)) | is.infinite(maxdepth))) {
-    stop("Argument maxdepth should consist of  of integer values or Inf), or a random number generating function.\n")
-  }
-  
-  ## Check if proper learnrate argument is specified:
-  if (!(length(learnrate) == 1L && is.numeric(learnrate) && 
-        (learnrate >= 0 || learnrate <= 1))) {
-    stop("Argument learnrate shoud be a single numeric value >= 0 and <= 1.\n")
-  }
-  
-  ## Check if proper mtry argument is specified:
-  if (!(length(mtry) == 1L && mtry > 0 && 
-        (mtry == suppressWarnings(as.integer(mtry)) || is.infinite(mtry)))) {
-    stop("Argument mtry should be a single integer value, or Inf.\n")
-  }
-  
-  ## Check if proper ntrees argument is specified:
-  if (!(length(ntrees) == 1L && ntrees == as.integer(ntrees) && ntrees > 0)) {
-    stop("Argument ntrees should be a single positive integer.\n")
-  }
-  
-  ## Check if proper winsfrac argument is specified:
-  if (!(length(winsfrac == 1L) && is.numeric(winsfrac) && winsfrac >= 0 && 
-        winsfrac < 1)) {
-    stop("Argument winsfrac should be a numeric value >= 0 and < 1.\n")
-  }
-
-  ## Check if proper nfolds argument is specified:
-  if (!(length(nfolds) == 1L && nfolds > 0 && nfolds == as.integer(nfolds))) {
-    stop("Argument nfolds should be a positive integer.\n")
-  }
-  
-  ## Check if proper confirmatory argument is specified:
-  if (!is.null(confirmatory)) {
-    if (!is.character(confirmatory)) {
-      stop("Argument confirmatory should specify a character vector.\n")
-    }
-  }
-  
-  ## Check if logical arguments of length 1 are properly specified:
-  is_logical_and_length_one <- function(x) {is.logical(x) && length(x) == 1L}
-  for (i in c(use.grad, removeduplicates, removecomplements, normalize, 
-              standardize, ordinal, verbose, tree.unbiased, par.init, 
-              par.final)) {
-    if (!is_logical_and_length_one(i)) {
-      stop("Argument ", i, "should be TRUE or FALSE.\n")
-    }
-  }
-  
-  if (par.final || par.init) {
-    if(!requireNamespace("foreach")) {
-      warning("Parallel computation requires package foreach. Arguments par.init and par.final are set to FALSE.\n")   
-      par.init <- par.final <- FALSE
-    }
-  }
-
-  ## Check if proper tree.control argument is specified:
-  if (missing(tree.control)) {
-    if (tree.unbiased && use.grad) {
-      tree.control <- ctree_control(maxdepth = maxdepth[1], mtry = mtry)
-    } else if (tree.unbiased && !use.grad) {
-      tree.control <- mob_control(maxdepth = maxdepth[1] + 1, mtry = mtry)
-    } else if (!tree.unbiased) {
-      if (any(maxdepth > 29)) {
-        maxdepth[maxdepth > 29] <- 29L
-        warning("If tree.unbiased = FALSE, max(maxdepth) is 29.\n")
-      }
-      tree.control <- rpart.control(maxdepth = maxdepth[1L])
-      if (!is.infinite(mtry)) {
-        warning("Value specified for mtry will be ignored if tree.unbiased = FALSE.\n")
-      }
-    }
-  } else {
-    if (!is.list(tree.control)) {
-      stop("Argument tree.control should specify a list of control parameters.\n")
-    }
-    if (use.grad && tree.unbiased) {
-      if (!setequal(names(ctree_control()), names(tree.control))) {
-        args_not_in_ctree_control <- names(tree.control)[which(
-          !names(tree.control) %in% names(ctree_control()))]
-        warning("Argument tree.control contains named elements: ", 
-                paste0(args_not_in_ctree_control, collapse = ", "), 
-                ", which should probably not be there, see ?ctree_control.\n")
-      }
-    } else if (!use.grad && tree.unbiased) { 
-      if (!setequal(names(mob_control()), names(tree.control))) {
-        args_not_in_glmtree_control <- names(tree.control)[which(
-          !names(tree.control) %in% names(mob_control()))]
-        warning("Argument tree.control has named elements ", 
-                 paste0(args_not_in_glmtree_control, collapse = ", "), 
-                ", which should probably not be there, see ?mob_control.\n")
-      }
-    } else if (!tree.unbiased) {
-      if (!setequal(names(rpart.control()), names(tree.control))) {
-        warning("Argument tree.control should be a list containing names elements ", paste(names(rpart.control()), collapse = ', '), "\n")
-      }
-    }
-    if (use.grad) { ## if ctree or rpart are employed:
-      tree.control$maxdepth <- maxdepth[1L]      
-    } else if (tree.unbiased) { ## if glmtree is employed:
-      tree.control$maxdepth <- maxdepth[1L] + 1L
-    }
-    if (tree.unbiased) {
-      tree.control$mtry <- mtry
-    } else if (mtry != Inf) {
-      warning("Argument tree.unbiased was set to FALSE, so rpart is employed for tree induction, and value specified for mtry will be ignored.\n")
-      mtry <- Inf
-    }
-  }
-  
-  if (!tree.unbiased && !use.grad && learnrate > 0) {
-    stop("Employing the rpart algorithm with a learnrate > 0 without gradient boosting is not supported.\n")
-  }
-  
-  
-  ######################################
-  ## Prepare data, formula and family ##
-  ######################################
-
-  if (!is.null(tree.control$cluster)) {
-    ## If cluster variable has been specified, make sure it is included in data 
-    if (!inherits(tree.control$cluster, "name")) 
-      warning("A cluster argument was passed to argument tree.control, but it is not a name, so it might be ignored. ")
-    cluster <- data[ , as.character(tree.control$cluster)]
-  }
-  
-  ## prepare model frame:
-  data <- model.frame(Formula::as.Formula(formula), data = data, na.action = NULL)
-  if (!is.null(tree.control$cluster)) {
-    ## If cluster variable has been specified, make sure it is included in data 
-    data[ , as.character(tree.control$cluster)] <- cluster
-  }
-
-
-  ## Coerce character and logical variables to factors:
-  if (any(char_names <- sapply(data, is.character))) {
-    char_names <- names(data)[char_names]
-    warning("The following variables were of class 'character' and will be coerced to 'factor': ", paste(char_names, collapse = " "), "\n")
-    data[ , char_names] <- sapply(data[ , char_names], factor)
-  }
-  if (any(logic_names <- sapply(data, is.logical))) {
-    logic_names <- names(data)[logic_names]
-    warning("The following variables were of class 'logical' and will be coerced to 'factor': ", paste(logic_names, collapse = " "), "\n")
-    data[ , logic_names] <- sapply(data[ , logic_names], factor)
-  } 
-  
-  ## get response variable name(s):
-  y_names <- names(data)[attr(attr(data, "terms"), "response")]
-  if (family == "mgaussian" || length(y_names) == 0) {
-    y_names <- attr(terms(Formula(formula), rhs = 0, data = data), "term.labels")
-    family <- "mgaussian"
-  }
-  
-  ## get predictor variable names:
-  if (family == "cox" || is.Surv(data[ , y_names])) {
-    x_names <- attr(attr(data, "terms"), "term.labels")
-  } else {
-    x_names <- attr(terms(Formula(formula), lhs = 0, data = data), "term.labels")
-  }
-  
-  ## Coerce ordered categorical variables to numeric:
-  if (ordinal) {
-    if (any(ord_var_inds <- sapply(data[ , x_names], is.ordered))) {
-      data[ , ord_var_inds] <- sapply(data[ , ord_var_inds], as.numeric)
-    }
-  }
-  
-  ## expand dot and put ticks around variables within functions, if present:
-  if (family != "mgaussian") {
-    formula <- formula(data)
-  } else {
-    formula <- Formula(formula(paste0(
-      paste0(paste0("`", y_names, "`"), collapse = " + "), 
-      " ~ ", 
-      paste0(paste0("`", x_names, "`"), collapse = " + "))))
-  }
-
-  ## get sample size:
-  n <- nrow(data)
-
-  ## check and set correct family:
-  if (is.null(cl$family)) {
-    if (length(y_names) == 1L) {
-      if (is.factor(data[ , y_names])) { # then family should be bi- or multinomial
-        if (is.ordered(data[ , y_names])) {
-          warning("An ordered factor was specified as the response variable, which will be treated as an unordered factor response.")
-          data[ , y_names] <- factor(data[ , y_names], ordered = FALSE)
-        } 
-        if (nlevels(data[ , y_names]) == 2L) {
-            family <- "binomial"
-        } else if (nlevels(data[ , y_names]) > 2L) {
-            family <- "multinomial"
-          }
-      } else if (is.Surv(data[ , y_names])) { # then family should be cox
-        family <- "cox"
-      } else if (!is.numeric(data[ , y_names])) { # then response is not a factor, survival or numeric
-        warning("The response variable specified through argument formula should be of class numeric, factor or Surv.")
-      }
-    } else if (length(y_names) > 1L) { # multiple responses specified, should be numeric
-      if (all(sapply(data[ , y_names], is.numeric))) {
-        family <- "mgaussian"
-      } else {
-        warning("Multiple response variables were specified, but not all were (but should be) numeric.\n")
-      }
-    }
-    
-  } else { # family was specified, check if correct;
-    
-    if (family[1L] == "gaussian") {
-      if (length(y_names) > 1L) {
-        warning("Argument family was set to 'gaussian', but multiple response variables were specified in formula. Consider specifying family = 'mggaussian'?\n")        
-      }
-      if (!is.numeric(data[ , y_names])) { # then family should be poisson or gaussian
-        warning("Argument family was set to 'gaussian', but the response variable specified in formula is not of class numeric.\n")
-      }
-    } else if (family[1L] == "poisson") {
-      if (length(y_names) > 1L) {
-        warning("Argument family was set to 'poisson', but multiple response variables were specified, which is not supported.\n")
-      }
-      if (!isTRUE(all.equal(round(data[ , y_names]), data[ , y_names]))) {
-        warning("Argument family' was set to 'poisson', but the response variable specified in formula is non-integer.\n")
-      }
-    } else if (family[1L] == "multinomial") {
-      if (length(y_names) > 1L) {
-        warning("Argument family was set to 'multinomial', but multiple response variables were specified in formula, which is not supported. Check specified response variable (should be a single factor with > 2 levels) and family.\n")        
-      }
-      if (!is.factor(data[ , y_names])) {
-        warning("Argument family was set to 'multinomial', but response variable is numeric. Response variable will be converted to factor.")
-        data[ , y_names] <- factor(data[ , y_names])
-      }  
-    } else if (family[1L] == "binomial") {
-      if (length(y_names) > 1L) {
-        warning("Argument family was set to 'binomial', but multiple response variables were specified, which is not supported.\n")
-      } else if (!is.factor(data[ , y_names])) {
-        warning("Argument family was set to 'binomial', but the response variable specified is not a factor.\n")
-      } else if (is.ordered(data[ , y_names])) {
-        warning("Argument family was set to 'binomial', but the response variable specified is an ordered factor. It will be treated as an unordered factor.")
-      } else if (nlevels(data[ , y_names]) != 2L) {
-        warning("Argument family was set to 'binomial', but the response variable has ", nlevels(data[ , y_names]), " levels.\n")        
-      }
-    } else if (family[1L] == "multinomial") {
-      if (length(y_names) > 1L) {
-        warning("Argument family was set to 'multinomial', but multiple response variables were specified, which is not supported.\n")
-      } else if (!is.factor(data[ , y_names])) {
-        warning("Argument family was set to 'multinomial', but the response variable specified is not a factor.\n")
-      } else if (is.ordered(data[ , y_names])) {
-        warning("Argument family was set to 'multinomial', but the response variable specified is an ordered factor. It will be treated as an unordered factor.")
-      } else if (nlevels(data[ , y_names]) < 3L) {
-        warning("Argument family was set to 'multinomial', but the response variable has ", nlevels(data[ , y_names]), " levels.\n")
-      }
-    } else if (family[1L] == "cox") {
-      if (length(y_names) > 1L) {
-        warning("Argument family was set to 'cox', but multiple response variables were specified, which is not supported.\n")
-      } else if (!is.Surv(data[ , y_names])) {
-        warning("Argument family was set to 'cox', but the response variable specified is not of class Surv.\n")
-      }
-    } else if (family == "mgaussian") {
-      if (length(y_names) == 1L) {
-        warning("Argument family was set to 'mgaussian', but only a single response variable was specified.\n")
-      } else if (!all(sapply(data[ , y_names], is.numeric))) {
-        warning("Argument family was set to 'mgaussian', but not all response variables specified are numeric.\n")
-      }
-    }
-  }
-
-  ## Check specification of tree growing algorithms employed:
-  if (!tree.unbiased) { # rpart is employed
-    if (family == "mgaussian") {
-      stop("Employing rpart algorithm for rule induction with a multivariate response variable is not supported. Specify tree.unbiased = TRUE and use.grad = FALSE.\n")
-    } else if (learnrate > 0 && family == "multinomial") {
-      stop("Employing rpart algorithm for rule induction with a multinomial response variable and learnrate > 0 is not supported. Specify learnrate = 1, or tree.unbiased = TRUE and use.grad = TRUE.\n")
-    }
-  } else if (!use.grad) { # (g)lmtree is employed
-    if (family == "multinomial") {
-      stop("Employing (g)lmtree for rule induction with a multinomial response variable is not supported. Specify use.grad = TRUE for multivariate responses.\n")
-    } else if (family == "mgaussian") {
-      stop("Employing (g)lmtree for rule induction with a multivariate response variable is not supported. Specify use.grad = TRUE for multivariate responses.\n")
-    } else if (family == "cox") {
-      stop("Employing (g)lmertree for rule induction with a survival response is not supported. Specify use.grad = TRUE for a survival response.\n")
-    }
-  }
-  
-  if (family == "cox") {
-    if (!requireNamespace("survival", quietly = TRUE)) {
-      stop("For fitting a prediction rule ensemble with a survival response, package survival should be installed and loaded.\n")    
-    }
-    if (learnrate > 0) {
-      if (!requireNamespace("mboost", quietly = TRUE)) {
-        stop("For fitting a prediction rule ensemble with a survival response and learning rate > 0, package mboost should be installed.\n")
-      }
-    }
-  }
-
-  ## Prevent response from being interpreted as count by ctree or rpart:
-  if (learnrate == 0 && family == "gaussian" && (!(tree.unbiased && !use.grad))) { # if glmtree is not employed
-    if (isTRUE(all.equal(round(data[ ,  y_names]), data[ ,  y_names]))) { # if response passes integer test
-      data[ ,  y_names] <- data[ ,  y_names] + 0.01 # add small constant to response to prevent response being interpreted as count by ctree or rpart
-      small_constant_added <- 0.01
-    } else {
-      small_constant_added <- FALSE
-    }
-  } else {
-    small_constant_added <- FALSE
-  }
-
-  if (any(is.na(data))) {
-    weights <- weights[complete.cases(data)]
-    data <- data[complete.cases(data),]
-    n <- nrow(data)
-    warning("Some observations have missing values and have been removed from the data. New sample size is ", n, ".\n", immediate. = TRUE)
-  }
-
-  if (verbose) {
-    if (family == "gaussian") {
-      cat("\nA rule ensemble for prediction of a continuous response will be created.\n")
-    } else if (family == "poisson") {     
-      cat("\nA rule ensemble for prediction of a count response will be created.\n")
-    } else if (family == "binomial") {
-      cat("\nA rule ensemble for prediction of a binary categorical response will be created.\n")
-    } else if (family == "multinomial") {
-      cat("\nA rule ensemble for prediction of a multinomial response will be created.\n")
-    } else if (family == "mgaussian") {
-      cat("\nA rule ensemble for prediction of a multivariate continuous response will be created.\n")
-    } else if (family == "cox") {
-      cat("\nA rule ensemble for prediction of a survival response will be created.\n")
-    }
-  }
-  
     # fit the pre funtion, fit.final = FALSE
     pre_fit <- pre(formula = formula, data = data, fit.final = FALSE, family = family, ad.alpha = ad.alpha, 
                ad.penalty = ad.penalty, use.grad = use.grad, weights = weights, type = type, sampfrac = sampfrac, 
@@ -464,9 +83,23 @@ preGroup <- function(formula, data,  treatment_indicator, family = "gaussian", a
     # MVS only support numeric group ids
     group_id <- make_group_id(pre_fit, treatment_indicator)
 
-    if(min(table(group_id)) >= 2) {
+    # MVS does not run when the base level learners have less than 2 columns
+    if(min(table(group_id)) < 2) {
 
-      y_var <- if(family == "binomial") {
+            warning("The mininum number of linear terms / prognostic rules / prescriptive terms is less than 2. The preGroup model cannot be fitted. The pre model will be fitted.")
+
+            return(pre(formula = formula, data = data, family = family, ad.alpha = ad.alpha, 
+                    ad.penalty = ad.penalty, use.grad = use.grad, weights = weights, type = type, sampfrac = sampfrac, 
+                    maxdepth = maxdepth, learnrate = learnrate, mtry = mtry, ntrees = ntrees,
+                    confirmatory = confirmatory, singleconditions = singleconditions,
+                    winsfrac = winsfrac, normalize = normalize, standardize = standardize,
+                    ordinal = ordinal, nfolds = nfolds, tree.control = tree.control, tree.unbiased = tree.unbiased, 
+                    removecomplements = removecomplements, removeduplicates = removeduplicates, 
+                    verbose = verbose, par.init = par.init, par.final = par.final, 
+                    sparse = sparse,  ...))
+
+    } else {
+        y_var <- if(family == "binomial") {
           as.factor(pre_fit$data[, 1])
       } else {
           pre_fit$data[, 1]
@@ -482,23 +115,10 @@ preGroup <- function(formula, data,  treatment_indicator, family = "gaussian", a
       rule_type[rule_type == 2] <- "prognostic"
       rule_type[rule_type == 3] <- "prescriptive"
       
-      result <- list(mvs_fit = mvs_fit, pre_fit = pre_fit, call = match.call(), rule_type = rule_type)
+      result <- list(mvs_fit = mvs_fit, pre_fit = pre_fit, call = cl, rule_type = rule_type)
 
-        class(result) <- "preGroup"
-        return(result)
-
-    } else {
-      warning("The mininum number of linear terms / prognostic rules / prescriptive terms is less than 2. The preGroup model cannot be fitted. The pre model will be fitted.")
-
-      return(pre(formula = formula, data = data, family = family, ad.alpha = ad.alpha, 
-               ad.penalty = ad.penalty, use.grad = use.grad, weights = weights, type = type, sampfrac = sampfrac, 
-               maxdepth = maxdepth, learnrate = learnrate, mtry = mtry, ntrees = ntrees,
-               confirmatory = confirmatory, singleconditions = singleconditions,
-               winsfrac = winsfrac, normalize = normalize, standardize = standardize,
-               ordinal = ordinal, nfolds = nfolds, tree.control = tree.control, tree.unbiased = tree.unbiased, 
-               removecomplements = removecomplements, removeduplicates = removeduplicates, 
-               verbose = verbose, par.init = par.init, par.final = par.final, 
-               sparse = sparse,  ...))
+      class(result) <- "preGroup"
+      return(result)
     }
 }
 
@@ -542,10 +162,29 @@ make_group_id <- function(pre_model, treatment_indicator) {
 
 }
 
+#' Extract Grouped Coefficients from preGroup Model
+#'
+#' This function calculates the aggregated coefficients for a `preGroup` model,
+#' combining intercepts and coefficients from different hierarchical levels.
+#'
+#' @param preGroup_model A model object, which must be of class `preGroup`.
+#' @param ... Additional arguments passed to or from other methods.
+#' @return A data frame of combined coefficients and descriptions, sorted with respect to origin.
+#' @details The function first verifies the class of the model, then extracts and processes
+#' coefficients from multiple levels of the model to compute the grand intercept and other
+#' subgroup coefficients. It finally merges these results with the rule descriptions from
+#' the `pre_fit` component of the model, handles missing descriptions, and sorts the resulting data frame.
+#' @export
+#' @examples
+#' # Assuming `model` is a preGroup model
+#' result <- coef.preGroup(model)
+#' print(result)
+
 coef.preGroup <- function(preGroup_model, ...) {
 
-    if(!class(preGroup_model) == "preGroup") {
-        stop("The model must belong to class 'preGroup'. ")
+    # Ensure the object is of the correct class
+    if (!inherits(preGroup_model, "preGroup")) {
+        stop("The model must belong to class 'preGroup'.")
     }
 
     mvs_coef_list <- coef(preGroup_model$mvs_fit)
@@ -607,21 +246,90 @@ coef.preGroup <- function(preGroup_model, ...) {
     return(coefs)
 }
 
-predict.preGroup <- function(preGroup_model, newdata, ...) {
 
-    if(!class(preGroup_model) == "preGroup") {
-        stop("The model must belong to class 'preGroup'. ")
+#' Predict Responses Using preGroup Model
+#'
+#' Predicts responses based on a `preGroup` model and new data.
+#'
+#' @param preGroup_model A `preGroup` model object from which predictions will be made.
+#' @param newdata New data on which predictions are to be made.
+#' #' @param type The type of prediction to be made: 'response' or 'HTE'. Type 'response' returns the predicted 
+#' response values, while 'HTE' returns the heterogeneous treatment effects (for causal modelling).
+#' @param ... Additional arguments passed to or from other methods.
+#' @return A vector of predicted responses.
+#' @details The function checks if the model object is a `preGroup` and then uses the
+#' `get_new_X` function to transform new data into the model matrix format. Predictions
+#' are then made using the multivariate structure of the `preGroup` model.
+#' @export
+#' @examples
+#' # Assuming `model` is a preGroup model and `new_data` is available
+#' predictions <- predict.preGroup(model, new_data)
+
+
+predict.preGroup <- function(preGroup_model, newdata, type = "response", ...) {
+    # Validate model class
+    if (!inherits(preGroup_model, "preGroup")) {
+        stop("The model must belong to class 'preGroup'.")
     }
 
-    # Check new data
+    # Define and check permissible types
+    valid_types <- c("response", "HTE", "hte", "Hte")
+    if (!type %in% valid_types) {
+        stop("type must be one of 'response', 'HTE'.")
+    }
 
-    # build the modmat for prediction
-    new_x <- get_new_X(preGroup_model, newdata)
-
-    y_predict <- predict(preGroup_model$mvs_fit, new_x, predtype = "response", cvlambda = "lambda.min")
-    
-    return(y_predict)
+    # Process prediction based on type
+    if (type == "response") {
+        new_x <- get_new_X(preGroup_model, newdata)
+        return(predict(preGroup_model$mvs_fit, new_x, predtype = "response", cvlambda = "lambda.min"))
+    } else {
+        # Avoid repeating predictions by computing them once
+        return(calculate_hte(preGroup_model, newdata))
+    }
 }
+
+# Helper function for HTE prediction
+calculate_hte <- function(preGroup_model, newdata) {
+    raw_treatment_indicator <- preGroup_model$call$treatment_indicator
+    levels <- sort(unique(as.numeric(levels(preGroup_model$pre_fit$data[[raw_treatment_indicator]]))), decreasing = TRUE)
+
+    # Check if enough levels exist
+    if (length(levels) < 2) {
+        stop("Not enough treatment levels to compute HTE.")
+    }
+
+    message("HTE will be calculated for treatment ", levels[1], " against treatment ", levels[2], ".\n")
+
+    # Set up data for two groups
+    newdata_g1 <- within(newdata, {
+        raw_treatment_indicator <- factor(levels[1], levels = levels)
+    })
+    newdata_g2 <- within(newdata, {
+        raw_treatment_indicator <- factor(levels[2], levels = levels)
+    })
+
+    # Calculate HTE
+    hte <- predict(preGroup_model, newdata = newdata_g1, type = "response") - 
+           predict(preGroup_model, newdata = newdata_g2, type = "response")
+    return(hte)
+}
+
+#' Generate Model Matrix from New Data for preGroup Model
+#'
+#' This function processes new data to fit the structure of a `preGroup` model,
+#' facilitating the prediction process.
+#'
+#' @param preGroup_model A `preGroup` model object, specifically its `pre_fit` component.
+#' @param new_data New data to be transformed into model matrix format.
+#' @return A list containing the transformed new data as a model matrix.
+#' @details The function retrieves settings and parameters from the `pre_fit` component of
+#' the `preGroup` model and applies these to the new data to generate a suitable model matrix.
+#' This involves applying transformation rules and handling different types of predictors as
+#' specified in the model.
+#' @export
+#' @examples
+#' # Assuming `model` is a preGroup model and `new_data` is ready
+#' mod_matrix <- get_new_X(model, new_data)
 
 get_new_X <- function(preGroup_model, new_data) {
 
@@ -862,6 +570,33 @@ get_modmat <- function(
   x
 }
 
+#' Calculate Variable Importances for a preGroup Model
+#'
+#' Computes variable importances based on a preGroup model, offering options for both global and local importance, 
+#' standardization of importances, and various additional parameters.
+#'
+#' @param preGroup_model An object of class 'preGroup'.
+#' @param standardize Logical; if TRUE, importance scores are standardized.
+#' @param global Logical; if TRUE, global importances are calculated, otherwise local importances are provided.
+#' @param penalty.par.val A character string specifying the penalty parameter value to be used in calculation.
+#' @param gamma The gamma parameter for regularization paths in models; if not NULL, it modifies the penalties.
+#' @param quantprobs A numeric vector specifying the quantiles to be used in local importance calculation.
+#' @param round Numeric; the number of decimal places to round the importances to (if NA, no rounding is performed).
+#' @param plot Logical; if TRUE, a plot of the importances is generated.
+#' @param ylab The y-axis label in the plot.
+#' @param main The main title for the plot.
+#' @param abbreviate An integer specifying how much to abbreviate variable names in the plot.
+#' @param diag.xlab Logical; if TRUE, labels are diagonal on the x-axis of the plot.
+#' @param diag.xlab.hor Horizontal adjustment for diagonal labels.
+#' @param diag.xlab.vert Vertical adjustment for diagonal labels.
+#' @param cex.axis The character expansion size for axis names.
+#' @param legend A character string or logical; position of the legend in the plot or FALSE to exclude it.
+#' @param ... Additional arguments passed to underlying functions.
+#' @return A list containing the variable importances as data frames.
+#' @export
+#' @examples
+#' # Assuming `model` is a preGroup model
+#' importance_data <- importance.preGroup(model)
 
 importance.preGroup <- function(preGroup_model, standardize = FALSE, global = TRUE,
                            penalty.par.val = "lambda.1se", gamma = NULL,
@@ -1197,6 +932,20 @@ importance.preGroup <- function(preGroup_model, standardize = FALSE, global = TR
   }
 }
 
+#' Create Importance Matrix for Single Response Models
+#'
+#' Generates a matrix of importances for each variable based on the importances calculated in `importance.preGroup` 
+#' for models with a single response variable.
+#'
+#' @param imp A list containing the importance data generated by `importance.preGroup`.
+#' @return A matrix with variable names as columns and types of importance as rows (linear, prognostic, prescriptive).
+#' @details This function organizes importances into a matrix format for easier visualization and analysis, 
+#'          distinguishing between different types of importances.
+#' @export
+#' @examples
+#' # Assuming `imp` is the list returned from `importance.preGroup`
+#' importance_matrix <- create_importance_matrix(imp)
+
 create_importance_matrix <- function(imp) {
   # Extract varnames and the importance values from varimps
   varnames <- imp$varimps$varname
@@ -1226,6 +975,19 @@ create_importance_matrix <- function(imp) {
 
   return(sorted_importance_matrix)
 }
+
+#' Create Importance Matrices for Multivariate Response Models
+#'
+#' Generates a list of matrices of importances for each variable and each response in a multivariate model 
+#' based on the importances calculated in `importance.preGroup`.
+#'
+#' @param imp A list containing the importance data generated by `importance.preGroup`.
+#' @return A list of matrices, each corresponding to a different response variable in the model.
+#' @details Each matrix in the list organizes importances for a specific response, formatted similarly to `create_importance_matrix`.
+#' @export
+#' @examples
+#' # Assuming `imp` is the list returned from `importance.preGroup`
+#' importance_matrices <- create_importance_matrix_multivariate(imp)
 
 create_importance_matrix_multivariate <- function(imp) {
   # Get the response names by extracting column names that start with "importance."

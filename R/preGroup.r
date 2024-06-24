@@ -58,7 +58,7 @@ require(survival)
 #'
 #' @export
 
-preGroup <- function(formula, data,  treatment_indicator, family = "gaussian", ad.alpha = NA, 
+preGroup <- function(formula, data, treatment_indicator, family = "gaussian", ad.alpha = NA, 
                 ad.penalty = "lambda.min",
                 use.grad = TRUE, weights, type = "both", sampfrac = .5, 
                 maxdepth = 3L, learnrate = .01, mtry = Inf, ntrees = 500,
@@ -115,7 +115,7 @@ preGroup <- function(formula, data,  treatment_indicator, family = "gaussian", a
       rule_type[rule_type == 2] <- "prognostic"
       rule_type[rule_type == 3] <- "prescriptive"
       
-      result <- list(mvs_fit = mvs_fit, pre_fit = pre_fit, call = cl, rule_type = rule_type)
+      result <- list(mvs_fit = mvs_fit, pre_fit = pre_fit, call = match.call(), rule_type = rule_type, treatment_indicator = treatment_indicator)
 
       class(result) <- "preGroup"
       return(result)
@@ -290,8 +290,10 @@ predict.preGroup <- function(preGroup_model, newdata, type = "response", ...) {
 
 # Helper function for HTE prediction
 calculate_hte <- function(preGroup_model, newdata) {
-    raw_treatment_indicator <- preGroup_model$call$treatment_indicator
-    levels <- sort(unique(as.numeric(levels(preGroup_model$pre_fit$data[[raw_treatment_indicator]]))), decreasing = TRUE)
+    raw_treatment_indicator <- preGroup_model$treatment_indicator
+    # print(raw_treatment_indicator)
+    # print(preGroup_model$pre_fit$data[, raw_treatment_indicator])
+    levels <- sort(unique(as.numeric(levels(as.factor(preGroup_model$pre_fit$data[, raw_treatment_indicator])))), decreasing = TRUE)
 
     # Check if enough levels exist
     if (length(levels) < 2) {
@@ -301,18 +303,63 @@ calculate_hte <- function(preGroup_model, newdata) {
     message("HTE will be calculated for treatment ", levels[1], " against treatment ", levels[2], ".\n")
 
     # Set up data for two groups
-    newdata_g1 <- within(newdata, {
-        raw_treatment_indicator <- factor(levels[1], levels = levels)
-    })
-    newdata_g2 <- within(newdata, {
-        raw_treatment_indicator <- factor(levels[2], levels = levels)
-    })
+    # newdata_g1 <- within(newdata, {
+    #     raw_treatment_indicator <- factor(levels[1], levels = levels)
+    # })
+    # newdata_g2 <- within(newdata, {
+    #     raw_treatment_indicator <- factor(levels[2], levels = levels)
+    # })
+    newdata_g1 <- newdata
+    newdata_g1[, raw_treatment_indicator] <- factor(as.numeric(levels[1]), levels = levels)
+    print(newdata_g1[, raw_treatment_indicator])
+    # print(colnames(newdata_g1))
 
+    newdata_g2 <- newdata
+    newdata_g2[, raw_treatment_indicator] <- factor(as.numeric(levels[2]), levels = levels)
+    # print(newdata_g2[, raw_treatment_indicator])
+    # print(headings(newdata_g2))
+    print("starting Hte calculation")
+
+    # error: in get_modmat when all group indicators are set to 0. problems with standardization
+    predict(preGroup_model, newdata = newdata_g1, type = "response")
+    # print()
     # Calculate HTE
     hte <- predict(preGroup_model, newdata = newdata_g1, type = "response") - 
            predict(preGroup_model, newdata = newdata_g2, type = "response")
     return(hte)
 }
+
+# calculate_hte_pre <- function(pre_model, newdata, treatment_indicator) {
+
+#     raw_treatment_indicator <- treatment_indicator
+#     levels <- sort(unique(as.numeric(levels(pre_model$data[,raw_treatment_indicator]))), decreasing = TRUE)
+
+#     # Check if enough levels exist
+#     if (length(levels) < 2) {
+#         stop("Not enough treatment levels to compute HTE.")
+#     }
+
+#     message("HTE will be calculated for treatment ", levels[1], " against treatment ", levels[2], ".\n")
+
+#     # Set up data for two groups
+#     newdata_g1 <- newdata
+#     newdata_g1$raw_treatment_indicator <-  factor(levels[1], levels = levels)
+#     print(newdata_g1$raw_treatment_indicator)
+#     newdata_g2 <- newdata
+#     newdata_g2$raw_treatment_indicator <-  factor(levels[2], levels = levels)
+#     print(newdata_g2$raw_treatment_indicator)
+#     # within(newdata, {
+#     #     raw_treatment_indicator <- factor(levels[1], levels = levels)
+#     # })
+#     # newdata_g2 <- within(newdata, {
+#     #     raw_treatment_indicator <- factor(levels[2], levels = levels)
+#     # })
+    
+#     # Calculate HTE
+#     hte <- predict(pre_model, newdata = newdata_g1, type = "response") - 
+#            predict(pre_model, newdata = newdata_g2, type = "response")
+#     return(hte)
+# }
 
 #' Generate Model Matrix from New Data for preGroup Model
 #'
@@ -1025,6 +1072,5 @@ create_importance_matrix_multivariate <- function(imp) {
     # Store the matrix in the list with the response name as the key
     importance_matrices[[response]] <- importance_matrix
   }
-
   return(importance_matrices)
 }

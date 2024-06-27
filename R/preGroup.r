@@ -68,7 +68,11 @@ preGroup <- function(formula, data, treatment_indicator, family = "gaussian", ad
                 removecomplements = TRUE, removeduplicates = TRUE, 
                 verbose = FALSE, par.init = FALSE, par.final = FALSE, 
                 sparse = FALSE, ...) {
-
+    
+    if(!is.factor(data[ ,treatment_indicator])) {
+        message("The treatment_indicator is not a factor. It will be converted to a factor.")
+        data[ ,treatment_indicator] <- as.factor(data[ ,treatment_indicator])
+    }
     # fit the pre funtion, fit.final = FALSE
     pre_fit <- pre(formula = formula, data = data, fit.final = FALSE, family = family, ad.alpha = ad.alpha, 
                ad.penalty = ad.penalty, use.grad = use.grad, weights = weights, type = type, sampfrac = sampfrac, 
@@ -293,11 +297,12 @@ calculate_hte <- function(preGroup_model, newdata) {
     raw_treatment_indicator <- preGroup_model$treatment_indicator
     # print(raw_treatment_indicator)
     # print(preGroup_model$pre_fit$data[, raw_treatment_indicator])
-    levels <- sort(unique(as.numeric(levels(as.factor(preGroup_model$pre_fit$data[, raw_treatment_indicator])))), decreasing = TRUE)
+    levels <- tryCatch(sort(unique(as.numeric(levels(as.factor(preGroup_model$pre_fit$data[, raw_treatment_indicator])))), decreasing = TRUE),
+                       error = function(e) {levels(as.factor(preGroup_model$pre_fit$data[, raw_treatment_indicator]))})
 
     # Check if enough levels exist
-    if (length(levels) < 2) {
-        stop("Not enough treatment levels to compute HTE.")
+    if (length(levels) != 2) {
+        stop("Only 2 different treatment levels should be used to compute HTE. The current model has ", length(levels), " levels.")
     }
 
     message("HTE will be calculated for treatment ", levels[1], " against treatment ", levels[2], ".\n")
@@ -311,7 +316,7 @@ calculate_hte <- function(preGroup_model, newdata) {
     # })
     newdata_g1 <- newdata
     newdata_g1[, raw_treatment_indicator] <- factor(as.numeric(levels[1]), levels = levels)
-    print(newdata_g1[, raw_treatment_indicator])
+    # print(newdata_g1[, raw_treatment_indicator])
     # print(colnames(newdata_g1))
 
     newdata_g2 <- newdata
@@ -320,9 +325,6 @@ calculate_hte <- function(preGroup_model, newdata) {
     # print(headings(newdata_g2))
     print("starting Hte calculation")
 
-    # error: in get_modmat when all group indicators are set to 0. problems with standardization
-    predict(preGroup_model, newdata = newdata_g1, type = "response")
-    # print()
     # Calculate HTE
     hte <- predict(preGroup_model, newdata = newdata_g1, type = "response") - 
            predict(preGroup_model, newdata = newdata_g2, type = "response")
@@ -381,6 +383,12 @@ calculate_hte <- function(preGroup_model, newdata) {
 get_new_X <- function(preGroup_model, new_data) {
 
     pre_model <- preGroup_model$pre_fit
+
+    treatment_indicator <- preGroup_model$treatment_indicator
+    if(!is.factor(new_data[ ,treatment_indicator])) {
+        message("The treatment_indicator is not a factor. It will be converted to a factor.")
+        new_data[ ,treatment_indicator] <- as.factor(new_data[ ,treatment_indicator])
+    }
 
     # get_modmat returns a list instead of the matrix
     new_modlist <- get_modmat(

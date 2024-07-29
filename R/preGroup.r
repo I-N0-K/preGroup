@@ -1,10 +1,10 @@
-require(rpart)
-require(partykit)
-require(glmnet)
-require(pre)
-require(mvs)
-require(Formula)
-require(survival)
+# require(rpart)
+# require(partykit)
+# require(glmnet)
+# require(pre)
+# require(mvs)
+# require(Formula)
+# require(survival)
 # utils::globalVariables("%dopar%")
 
 #' Pre-Group Function for Building Ensemble Models
@@ -48,7 +48,7 @@ require(survival)
 #'
 #' @return A list containing the fitted model object, the original call, and a classification 
 #'         of the model rules into types such as 'linear', 'prognostic', and 'prescriptive'.
-#'
+# ' @method preGroup
 #' @examples
 #' \dontrun{
 #'  data(iris)
@@ -58,7 +58,7 @@ require(survival)
 #'
 #' @export
 
-preGroup <- function(formula, data, treatment_indicator, family = "gaussian", ad.alpha = NA, 
+preGroup <- function(formula, data, treatment_indicator, alpha.mvs = c(0,1), family = "gaussian", ad.alpha = NA, 
                 ad.penalty = "lambda.min",
                 use.grad = TRUE, weights, type = "both", sampfrac = .5, 
                 maxdepth = 3L, learnrate = .01, mtry = Inf, ntrees = 500,
@@ -69,9 +69,17 @@ preGroup <- function(formula, data, treatment_indicator, family = "gaussian", ad
                 verbose = FALSE, par.init = FALSE, par.final = FALSE, 
                 sparse = FALSE, ...) {
     
+    if(is.null(treatment_indicator)) {
+        stop("The treatment_indicator cannot be null to fit the preGroup model.")
+    }
+
     if(!is.factor(data[ ,treatment_indicator])) {
         message("The treatment_indicator is not a factor. It will be converted to a factor.")
         data[ ,treatment_indicator] <- as.factor(data[ ,treatment_indicator])
+    }
+
+    if(levels(data[ ,treatment_indicator]) != 2) {
+        stop("The treatment_indicator must have only 2 levels.")
     }
     # fit the pre funtion, fit.final = FALSE
     pre_fit <- pre(formula = formula, data = data, fit.final = FALSE, family = family, ad.alpha = ad.alpha, 
@@ -90,17 +98,17 @@ preGroup <- function(formula, data, treatment_indicator, family = "gaussian", ad
     # MVS does not run when the base level learners have less than 2 columns
     if(min(table(group_id)) < 2) {
 
-            warning("The mininum number of linear terms / prognostic rules / prescriptive terms is less than 2. The preGroup model cannot be fitted. The pre model will be fitted.")
-
-            return(pre(formula = formula, data = data, family = family, ad.alpha = ad.alpha, 
-                    ad.penalty = ad.penalty, use.grad = use.grad, weights = weights, type = type, sampfrac = sampfrac, 
-                    maxdepth = maxdepth, learnrate = learnrate, mtry = mtry, ntrees = ntrees,
-                    confirmatory = confirmatory, singleconditions = singleconditions,
-                    winsfrac = winsfrac, normalize = normalize, standardize = standardize,
-                    ordinal = ordinal, nfolds = nfolds, tree.control = tree.control, tree.unbiased = tree.unbiased, 
-                    removecomplements = removecomplements, removeduplicates = removeduplicates, 
-                    verbose = verbose, par.init = par.init, par.final = par.final, 
-                    sparse = sparse,  ...))
+            # stop("The mininum number of linear terms / prognostic rules / prescriptive terms is less than 2. The preGroup model cannot be fitted. The pre model will be fitted.")
+            stop("The mininum number of linear terms / prognostic rules / prescriptive terms is less than 2. The preGroup model cannot be fitted.")
+            # return(pre(formula = formula, data = data, family = family, ad.alpha = ad.alpha, 
+            #         ad.penalty = ad.penalty, use.grad = use.grad, weights = weights, type = type, sampfrac = sampfrac, 
+            #         maxdepth = maxdepth, learnrate = learnrate, mtry = mtry, ntrees = ntrees,
+            #         confirmatory = confirmatory, singleconditions = singleconditions,
+            #         winsfrac = winsfrac, normalize = normalize, standardize = standardize,
+            #         ordinal = ordinal, nfolds = nfolds, tree.control = tree.control, tree.unbiased = tree.unbiased, 
+            #         removecomplements = removecomplements, removeduplicates = removeduplicates, 
+            #         verbose = verbose, par.init = par.init, par.final = par.final, 
+            #         sparse = sparse,  ...))
 
     } else {
         y_var <- if(family == "binomial") {
@@ -109,7 +117,7 @@ preGroup <- function(formula, data, treatment_indicator, family = "gaussian", ad
           pre_fit$data[, 1]
       }
 
-      mvs_fit <- MVS(x = as.matrix(pre_fit$modmat), y = y_var, alpha = c(1,0), nnc = c(0,1),
+      mvs_fit <- MVS(x = as.matrix(pre_fit$modmat), y = y_var, alpha = alpha.mvs, nnc = c(0,1),
                 view = as.matrix(group_id), family = family, cvloss = "mse")
       
       # now convert the group id to meaningful rule types
@@ -166,6 +174,16 @@ make_group_id <- function(pre_model, treatment_indicator) {
 
 }
 
+# summary.preGroup <- function(preGroup_model) {
+
+#     if (!inherits(preGroup_model, "preGroup")) {
+#         stop("The model must belong to class 'preGroup'.")
+#     }
+# }
+
+# print.preGroup <- function(preGroup_model) {
+
+# }
 #' Extract Grouped Coefficients from preGroup Model
 #'
 #' This function calculates the aggregated coefficients for a `preGroup` model,
@@ -178,6 +196,7 @@ make_group_id <- function(pre_model, treatment_indicator) {
 #' coefficients from multiple levels of the model to compute the grand intercept and other
 #' subgroup coefficients. It finally merges these results with the rule descriptions from
 #' the `pre_fit` component of the model, handles missing descriptions, and sorts the resulting data frame.
+#' @method coef preGroup
 #' @export
 #' @examples
 #' # Assuming `model` is a preGroup model
@@ -257,13 +276,14 @@ coef.preGroup <- function(preGroup_model, ...) {
 #'
 #' @param preGroup_model A `preGroup` model object from which predictions will be made.
 #' @param newdata New data on which predictions are to be made.
-#' #' @param type The type of prediction to be made: 'response' or 'HTE'. Type 'response' returns the predicted 
+#' @param type The type of prediction to be made: 'response' or 'HTE'. Type 'response' returns the predicted 
 #' response values, while 'HTE' returns the heterogeneous treatment effects (for causal modelling).
 #' @param ... Additional arguments passed to or from other methods.
 #' @return A vector of predicted responses.
 #' @details The function checks if the model object is a `preGroup` and then uses the
 #' `get_new_X` function to transform new data into the model matrix format. Predictions
 #' are then made using the multivariate structure of the `preGroup` model.
+#' @method predict preGroup
 #' @export
 #' @examples
 #' # Assuming `model` is a preGroup model and `new_data` is available
@@ -323,7 +343,7 @@ calculate_hte <- function(preGroup_model, newdata) {
     newdata_g2[, raw_treatment_indicator] <- factor(as.numeric(levels[2]), levels = levels)
     # print(newdata_g2[, raw_treatment_indicator])
     # print(headings(newdata_g2))
-    print("starting Hte calculation")
+    # print("starting HTE calculation")
 
     # Calculate HTE
     hte <- predict(preGroup_model, newdata = newdata_g1, type = "response") - 
@@ -331,37 +351,38 @@ calculate_hte <- function(preGroup_model, newdata) {
     return(hte)
 }
 
-# calculate_hte_pre <- function(pre_model, newdata, treatment_indicator) {
+calculate_hte_pre <- function(pre_model, newdata, treatment_indicator) {
 
-#     raw_treatment_indicator <- treatment_indicator
-#     levels <- sort(unique(as.numeric(levels(pre_model$data[,raw_treatment_indicator]))), decreasing = TRUE)
+    raw_treatment_indicator <- treatment_indicator
+    newdata[ ,raw_treatment_indicator] <- as.factor(newdata[ ,raw_treatment_indicator])
+    levels <- sort(unique(as.numeric(levels(newdata[ ,raw_treatment_indicator]))), decreasing = TRUE)
 
-#     # Check if enough levels exist
-#     if (length(levels) < 2) {
-#         stop("Not enough treatment levels to compute HTE.")
-#     }
+    # Check if enough levels exist
+    if (length(levels) < 2) {
+        stop("Not enough treatment levels to compute HTE.")
+    }
 
-#     message("HTE will be calculated for treatment ", levels[1], " against treatment ", levels[2], ".\n")
+    message("HTE will be calculated for treatment ", levels[1], " against treatment ", levels[2], ".\n")
 
-#     # Set up data for two groups
-#     newdata_g1 <- newdata
-#     newdata_g1$raw_treatment_indicator <-  factor(levels[1], levels = levels)
-#     print(newdata_g1$raw_treatment_indicator)
-#     newdata_g2 <- newdata
-#     newdata_g2$raw_treatment_indicator <-  factor(levels[2], levels = levels)
-#     print(newdata_g2$raw_treatment_indicator)
-#     # within(newdata, {
-#     #     raw_treatment_indicator <- factor(levels[1], levels = levels)
-#     # })
-#     # newdata_g2 <- within(newdata, {
-#     #     raw_treatment_indicator <- factor(levels[2], levels = levels)
-#     # })
+    # Set up data for two groups
+    newdata_g1 <- newdata
+    newdata_g1$raw_treatment_indicator <-  factor(as.numeric(levels[1]), levels = levels)
+    # print(newdata_g1$raw_treatment_indicator)
+    newdata_g2 <- newdata
+    newdata_g2$raw_treatment_indicator <-  factor(as.numeric(levels[2]), levels = levels)
+    # print(newdata_g2$raw_treatment_indicator)
+    # within(newdata, {
+    #     raw_treatment_indicator <- factor(levels[1], levels = levels)
+    # })
+    # newdata_g2 <- within(newdata, {
+    #     raw_treatment_indicator <- factor(levels[2], levels = levels)
+    # })
     
-#     # Calculate HTE
-#     hte <- predict(pre_model, newdata = newdata_g1, type = "response") - 
-#            predict(pre_model, newdata = newdata_g2, type = "response")
-#     return(hte)
-# }
+    # Calculate HTE
+    hte <- predict(pre_model, newdata = newdata_g1) - 
+           predict(pre_model, newdata = newdata_g2)
+    return(hte)
+}
 
 #' Generate Model Matrix from New Data for preGroup Model
 #'
@@ -385,6 +406,7 @@ get_new_X <- function(preGroup_model, new_data) {
     pre_model <- preGroup_model$pre_fit
 
     treatment_indicator <- preGroup_model$treatment_indicator
+
     if(!is.factor(new_data[ ,treatment_indicator])) {
         message("The treatment_indicator is not a factor. It will be converted to a factor.")
         new_data[ ,treatment_indicator] <- as.factor(new_data[ ,treatment_indicator])
@@ -648,10 +670,11 @@ get_modmat <- function(
 #' @param legend A character string or logical; position of the legend in the plot or FALSE to exclude it.
 #' @param ... Additional arguments passed to underlying functions.
 #' @return A list containing the variable importances as data frames.
+#' @method importance preGroup
 #' @export
 #' @examples
 #' # Assuming `model` is a preGroup model
-#' importance_data <- importance.preGroup(model)
+#' result <- importance.preGroup(preGroup_model)
 
 importance.preGroup <- function(preGroup_model, standardize = FALSE, global = TRUE,
                            penalty.par.val = "lambda.1se", gamma = NULL,
@@ -996,7 +1019,6 @@ importance.preGroup <- function(preGroup_model, standardize = FALSE, global = TR
 #' @return A matrix with variable names as columns and types of importance as rows (linear, prognostic, prescriptive).
 #' @details This function organizes importances into a matrix format for easier visualization and analysis, 
 #'          distinguishing between different types of importances.
-#' @export
 #' @examples
 #' # Assuming `imp` is the list returned from `importance.preGroup`
 #' importance_matrix <- create_importance_matrix(imp)
@@ -1039,7 +1061,6 @@ create_importance_matrix <- function(imp) {
 #' @param imp A list containing the importance data generated by `importance.preGroup`.
 #' @return A list of matrices, each corresponding to a different response variable in the model.
 #' @details Each matrix in the list organizes importances for a specific response, formatted similarly to `create_importance_matrix`.
-#' @export
 #' @examples
 #' # Assuming `imp` is the list returned from `importance.preGroup`
 #' importance_matrices <- create_importance_matrix_multivariate(imp)

@@ -1,10 +1,3 @@
-# require(rpart)
-# require(partykit)
-# require(glmnet)
-# require(pre)
-# require(mvs)
-# require(Formula)
-# require(survival)
 # utils::globalVariables("%dopar%")
 
 #' Pre-Group Function for Building Ensemble Models
@@ -17,6 +10,10 @@
 #' @param formula an object of class 'formula' describing the model to be fitted.
 #' @param data a data frame containing the variables specified in the formula.
 #' @param treatment_indicator a character string specifying the column used for treatment division.
+#' @param alpha.mvs a dummay vector of length two, indicating the alpha values used
+#' within  and between group penalization. A value of 1 yields lasso, a value of 0 ridge, a value
+#' between 0 and 1 elastic net. The default uses ridge for feature selection and lasso
+#' for group selection. 
 #' @param family a description of the error distribution to be used in the model. It can be one 
 #'        of 'gaussian', 'binomial', etc.
 #' @param ad.alpha optional alpha parameter for adjustment.
@@ -47,13 +44,13 @@
 #' @param ... additional arguments affecting the model fitting.
 #'
 #' @return A list containing the fitted model object, the original call, and a classification 
-#'         of the model rules into types such as 'linear', 'prognostic', and 'prescriptive'.
+#' of the model rules into types such as 'linear', 'prognostic', and 'prescriptive'.
 # ' @method preGroup
 #' @examples
 #' \dontrun{
 #'  data(iris)
 #'  result <- preGroup(Species ~ ., data = iris, treatment_indicator = "Petal.Width")
-#'  print(result)
+#'  result
 #' }
 #'
 #' @export
@@ -161,7 +158,7 @@ split_treatment_indicator_rule <- function(rules, treatment_indicator) {
 
 make_group_id <- function(pre_model, treatment_indicator) {
 
-    if(!class(pre_model) == "pre") {
+    if(!inherits(pre_model, "pre")) {
         stop("The model must belong to class 'pre'. ")
     }
 
@@ -189,7 +186,7 @@ make_group_id <- function(pre_model, treatment_indicator) {
 #' This function calculates the aggregated coefficients for a `preGroup` model,
 #' combining intercepts and coefficients from different hierarchical levels.
 #'
-#' @param preGroup_model A model object, which must be of class `preGroup`.
+#' @param object A model object, which must be of class `preGroup`.
 #' @param ... Additional arguments passed to or from other methods.
 #' @return A data frame of combined coefficients and descriptions, sorted with respect to origin.
 #' @details The function first verifies the class of the model, then extracts and processes
@@ -200,15 +197,21 @@ make_group_id <- function(pre_model, treatment_indicator) {
 #' @export
 #' @examples
 #' # Assuming `model` is a preGroup model
-#' result <- coef.preGroup(model)
-#' print(result)
+#' \dontrun{
+#' set.seed(42)
+#' mod <- preGroup(Species ~ ., data = iris, treatment_indicator = "Petal.Width")
+#' result <- coef(mod)
+#' result
+#' }
 
-coef.preGroup <- function(preGroup_model, ...) {
+coef.preGroup <- function(object, ...) {
 
     # Ensure the object is of the correct class
-    if (!inherits(preGroup_model, "preGroup")) {
+    if (!inherits(object, "preGroup")) {
         stop("The model must belong to class 'preGroup'.")
     }
+
+    preGroup_model <- object
 
     mvs_coef_list <- coef(preGroup_model$mvs_fit)
 
@@ -274,7 +277,7 @@ coef.preGroup <- function(preGroup_model, ...) {
 #'
 #' Predicts responses based on a `preGroup` model and new data.
 #'
-#' @param preGroup_model A `preGroup` model object from which predictions will be made.
+#' @param object A `preGroup` model object from which predictions will be made.
 #' @param newdata New data on which predictions are to be made.
 #' @param type The type of prediction to be made: 'response' or 'HTE'. Type 'response' returns the predicted 
 #' response values, while 'HTE' returns the heterogeneous treatment effects (for causal modelling).
@@ -287,12 +290,15 @@ coef.preGroup <- function(preGroup_model, ...) {
 #' @export
 #' @examples
 #' # Assuming `model` is a preGroup model and `new_data` is available
-#' predictions <- predict.preGroup(model, new_data)
+#' \dontrun{
+#' mod <- preGroup(Species ~ ., data = iris, treatment_indicator = "Petal.Width")
+#' new_data <- iris[1:5, ]
+#' predictions <- predict(mod, new_data)
+#' }
 
-
-predict.preGroup <- function(preGroup_model, newdata, type = "response", ...) {
+predict.preGroup <- function(object, newdata, type = "response", ...) {
     # Validate model class
-    if (!inherits(preGroup_model, "preGroup")) {
+    if (!inherits(object, "preGroup")) {
         stop("The model must belong to class 'preGroup'.")
     }
 
@@ -301,6 +307,8 @@ predict.preGroup <- function(preGroup_model, newdata, type = "response", ...) {
     if (!type %in% valid_types) {
         stop("type must be one of 'response', 'HTE'.")
     }
+
+    preGroup_model <- object
 
     # Process prediction based on type
     if (type == "response") {
@@ -327,13 +335,6 @@ calculate_hte <- function(preGroup_model, newdata) {
 
     message("HTE will be calculated for treatment ", levels[1], " against treatment ", levels[2], ".\n")
 
-    # Set up data for two groups
-    # newdata_g1 <- within(newdata, {
-    #     raw_treatment_indicator <- factor(levels[1], levels = levels)
-    # })
-    # newdata_g2 <- within(newdata, {
-    #     raw_treatment_indicator <- factor(levels[2], levels = levels)
-    # })
     newdata_g1 <- newdata
     newdata_g1[, raw_treatment_indicator] <- factor(as.numeric(levels[1]), levels = levels)
     # print(newdata_g1[, raw_treatment_indicator])
@@ -438,6 +439,14 @@ get_new_X <- function(preGroup_model, new_data) {
     return(new_modlist$x)
 }
 
+
+#' @importFrom utils head
+#' @importFrom stats sd quantile model.frame quantile terms model.matrix predict coef
+#' @importFrom Formula Formula
+#' @importFrom survival is.Surv
+#' @importFrom MatrixModels model.Matrix
+#' @importFrom pre pre
+#' @importFrom graphics barplot par text
 get_modmat <- function(
   # Pass these if you already have an object
   wins_points = NULL, x_scales = NULL,
@@ -647,6 +656,9 @@ get_modmat <- function(
   x
 }
 
+##' @export
+importance <- function(x, ...)  UseMethod("importance")
+
 #' Calculate Variable Importances for a preGroup Model
 #'
 #' Computes variable importances based on a preGroup model, offering options for both global and local importance, 
@@ -672,9 +684,9 @@ get_modmat <- function(
 #' @return A list containing the variable importances as data frames.
 #' @method importance preGroup
 #' @export
+#' @aliases importance
 #' @examples
-#' # Assuming `model` is a preGroup model
-#' result <- importance.preGroup(preGroup_model)
+#' result <- importance(preGroup_model)
 
 importance.preGroup <- function(preGroup_model, standardize = FALSE, global = TRUE,
                            penalty.par.val = "lambda.1se", gamma = NULL,
@@ -1019,9 +1031,6 @@ importance.preGroup <- function(preGroup_model, standardize = FALSE, global = TR
 #' @return A matrix with variable names as columns and types of importance as rows (linear, prognostic, prescriptive).
 #' @details This function organizes importances into a matrix format for easier visualization and analysis, 
 #'          distinguishing between different types of importances.
-#' @examples
-#' # Assuming `imp` is the list returned from `importance.preGroup`
-#' importance_matrix <- create_importance_matrix(imp)
 
 create_importance_matrix <- function(imp) {
   # Extract varnames and the importance values from varimps
@@ -1061,9 +1070,6 @@ create_importance_matrix <- function(imp) {
 #' @param imp A list containing the importance data generated by `importance.preGroup`.
 #' @return A list of matrices, each corresponding to a different response variable in the model.
 #' @details Each matrix in the list organizes importances for a specific response, formatted similarly to `create_importance_matrix`.
-#' @examples
-#' # Assuming `imp` is the list returned from `importance.preGroup`
-#' importance_matrices <- create_importance_matrix_multivariate(imp)
 
 create_importance_matrix_multivariate <- function(imp) {
   # Get the response names by extracting column names that start with "importance."

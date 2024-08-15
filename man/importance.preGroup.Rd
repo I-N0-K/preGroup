@@ -2,6 +2,7 @@
 % Please edit documentation in R/preGroup.r
 \name{importance.preGroup}
 \alias{importance.preGroup}
+\alias{importance}
 \title{Calculate Variable Importances for a preGroup Model}
 \usage{
 \method{importance}{preGroup}(
@@ -63,10 +64,9 @@
 A list containing the variable importances as data frames.
 }
 \description{
-Computes variable importances based on a preGroup model, offering options for both global and local importance,
+Computes variable importances based on a preGroup model, offering options for both global and local importance, 
 standardization of importances, and various additional parameters.
 }
 \examples{
-# Assuming `model` is a preGroup model
-result <- importance.preGroup(preGroup_model)
+result <- importance(preGroup_model)
 }

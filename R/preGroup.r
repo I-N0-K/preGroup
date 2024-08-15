@@ -34,7 +34,7 @@
 #' @param ordinal logical, to treat ordered factors as numeric.
 #' @param nfolds number of folds for cross-validation.
 #' @param tree.control list of control parameters for tree construction.
-#' @param tree.unbiased logical, indicating whether to use unbiased trees.
+#' @param tree.unbiased logical, indicating whether to use unbiased trees (conditional inference trees; ctrees) or biased trees (recursive partitionaing; rpart).
 #' @param removecomplements logical, whether to remove complement rules.
 #' @param removeduplicates logical, whether to remove duplicate rules.
 #' @param verbose logical, indicating whether to print detailed output during fitting.
@@ -45,6 +45,8 @@
 #'
 #' @return A list containing the fitted model object, the original call, and a classification 
 #' of the model rules into types such as 'linear', 'prognostic', and 'prescriptive'.
+#' @importFrom pre pre
+#' @importFrom mvs MVS
 # ' @method preGroup
 #' @examples
 #' \dontrun{
@@ -75,9 +77,20 @@ preGroup <- function(formula, data, treatment_indicator, alpha.mvs = c(0,1), fam
         data[ ,treatment_indicator] <- as.factor(data[ ,treatment_indicator])
     }
 
-    if(levels(data[ ,treatment_indicator]) != 2) {
+    if(length(levels(data[ ,treatment_indicator])) != 2) {
         stop("The treatment_indicator must have only 2 levels.")
     }
+
+    # Extract variable names from the formula
+    formula_vars <- all.vars(formula)
+
+    # Check if treatment indicator is in the formula
+    if (!(treatment_indicator %in% formula_vars)) {
+        message("Treatment indicator is not included in the formula. It will be automatically added to the formula to fit the preGroup model.")
+        # Modify the formula to include the treatment indicator
+        formula <- as.formula(paste(deparse(formula), "+", treatment_indicator))
+    }
+
     # fit the pre funtion, fit.final = FALSE
     pre_fit <- pre(formula = formula, data = data, fit.final = FALSE, family = family, ad.alpha = ad.alpha, 
                ad.penalty = ad.penalty, use.grad = use.grad, weights = weights, type = type, sampfrac = sampfrac, 
@@ -171,12 +184,97 @@ make_group_id <- function(pre_model, treatment_indicator) {
 
 }
 
-# summary.preGroup <- function(preGroup_model) {
+#' Summarize a preGroup Model
+#'
+#' @description
+#' Provides a summary of the preGroup model, including the tree generating algorithm, variable selection algorithm, and the number of nonzero coefficients for linear, prognostic, and prescriptive predictors.
+#'
+#' @param object An object of class 'preGroup'.
+#' @return A summary of the preGroup model.
+#' @export
+summary.preGroup <- function(object) {
 
-#     if (!inherits(preGroup_model, "preGroup")) {
-#         stop("The model must belong to class 'preGroup'.")
-#     }
-# }
+    preGroup_model <- object
+
+    if (!inherits(preGroup_model, "preGroup")) {
+        stop("The model must belong to class 'preGroup'.")
+    }
+
+    # Extract the call and formals
+    model_call <- as.list(match.call(preGroup, preGroup_model$call))
+    model_formals <- formals(preGroup)
+
+    # Extract parameters from the call or use default values from formals
+    tree_unbiased <- if (!is.null(model_call$tree_unbiased)) {
+        eval(model_call$tree_unbiased)
+    } else {
+        model_formals$tree_unbiased
+    }
+
+    use_grad <- if (!is.null(model_call$use_grad)) {
+        eval(model_call$use_grad)
+    } else {
+        model_formals$use_grad
+    }
+
+    alpha_mvs <- if (!is.null(model_call$alpha.mvs)) {
+        eval(model_call$alpha.mvs)
+    } else {
+        model_formals$alpha.mvs
+    }
+
+    # Extract coefficients data frame
+    coefficients_df <- coef(preGroup_model)
+
+    # Calculate the number of nonzero coefficients for each type
+    if ("linear" %in% coefficients_df$rule_type) {
+        linear_nonzero <- sum(coefficients_df$coefficient != 0 & coefficients_df$rule_type == "linear")
+    } else {
+        linear_nonzero <- 0
+    }
+
+    if ("prognostic" %in% coefficients_df$rule_type) {
+        prognostic_nonzero <- sum(coefficients_df$coefficient != 0 & coefficients_df$rule_type == "prognostic")
+    } else {
+        prognostic_nonzero <- 0
+    }
+
+    if ("prescriptive" %in% coefficients_df$rule_type) {
+        prescriptive_nonzero <- sum(coefficients_df$coefficient != 0 & coefficients_df$rule_type == "prescriptive")
+    } else {
+        prescriptive_nonzero <- 0
+    }
+
+    # Determine the tree generating algorithm
+    tree_algorithm <- if (tree_unbiased) {
+        "Conditional Inference Trees"
+    } else {
+        "Recursive Partitioning Trees"
+    }
+
+    # Determine the variable selection algorithm
+    variable_selection_algorithm <- if (all(alpha_mvs == c(0, 1))) {
+        "Ridge for individual feature selection, Lasso for grouped features selection"
+    } else if (all(alpha_mvs == c(1, 0))) {
+        "Lasso for individual feature selection, Ridge for grouped features selection"
+    } else {
+        "Custom alpha.mvs values"
+    }
+
+    # Determine the tree type if use.grad is FALSE
+    if (!use_grad) {
+        tree_algorithm <- "GLM Trees"
+    }
+
+    # Print the summary
+    cat("Summary of preGroup Model:\n")
+    cat("1. Tree Generating Algorithm:", tree_algorithm, "\n")
+    cat("2. Variable Selection Algorithm:", variable_selection_algorithm, "\n")
+    cat("3. Number of Nonzero Coefficients:\n")
+    cat("   - Linear Predictors:", linear_nonzero, "\n")
+    cat("   - Prognostic Predictors:", prognostic_nonzero, "\n")
+    cat("   - Prescriptive Predictors:", prescriptive_nonzero, "\n")
+}
 
 # print.preGroup <- function(preGroup_model) {
 
@@ -194,6 +292,7 @@ make_group_id <- function(pre_model, treatment_indicator) {
 #' subgroup coefficients. It finally merges these results with the rule descriptions from
 #' the `pre_fit` component of the model, handles missing descriptions, and sorts the resulting data frame.
 #' @method coef preGroup
+#' @importFrom mvs coef.MVS
 #' @export
 #' @examples
 #' # Assuming `model` is a preGroup model
@@ -287,6 +386,7 @@ coef.preGroup <- function(object, ...) {
 #' `get_new_X` function to transform new data into the model matrix format. Predictions
 #' are then made using the multivariate structure of the `preGroup` model.
 #' @method predict preGroup
+#' @importFrom mvs predict.MVS
 #' @export
 #' @examples
 #' # Assuming `model` is a preGroup model and `new_data` is available
@@ -398,9 +498,12 @@ calculate_hte_pre <- function(pre_model, newdata, treatment_indicator) {
 #' This involves applying transformation rules and handling different types of predictors as
 #' specified in the model.
 #' @export
+# ' @method get_new_X preGroup
 #' @examples
 #' # Assuming `model` is a preGroup model and `new_data` is ready
+#' \dontrun{
 #' mod_matrix <- get_new_X(model, new_data)
+#' }
 
 get_new_X <- function(preGroup_model, new_data) {
 

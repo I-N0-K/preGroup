@@ -45,7 +45,12 @@ preGroup(
 
 \item{treatment_indicator}{a character string specifying the column used for treatment division.}
 
-\item{family}{a description of the error distribution to be used in the model. It can be one
+\item{alpha.mvs}{a dummay vector of length two, indicating the alpha values used
+within  and between group penalization. A value of 1 yields lasso, a value of 0 ridge, a value
+between 0 and 1 elastic net. The default uses ridge for feature selection and lasso
+for group selection.}
+
+\item{family}{a description of the error distribution to be used in the model. It can be one 
 of 'gaussian', 'binomial', etc.}
 
 \item{ad.alpha}{optional alpha parameter for adjustment.}
@@ -84,7 +89,7 @@ of 'gaussian', 'binomial', etc.}
 
 \item{tree.control}{list of control parameters for tree construction.}
 
-\item{tree.unbiased}{logical, indicating whether to use unbiased trees.}
+\item{tree.unbiased}{logical, indicating whether to use unbiased trees (conditional inference trees; ctrees) or biased trees (recursive partitionaing; rpart).}
 
 \item{removecomplements}{logical, whether to remove complement rules.}
 
@@ -101,20 +106,20 @@ of 'gaussian', 'binomial', etc.}
 \item{...}{additional arguments affecting the model fitting.}
 }
 \value{
-A list containing the fitted model object, the original call, and a classification
+A list containing the fitted model object, the original call, and a classification 
 of the model rules into types such as 'linear', 'prognostic', and 'prescriptive'.
 }
 \description{
-This function facilitates the creation of ensemble models by grouping data based on
+This function facilitates the creation of ensemble models by grouping data based on 
 treatment indicators and other factors. It allows for various configurations and customizations
-to tailor the model fitting process to specific needs, including handling of different
+to tailor the model fitting process to specific needs, including handling of different 
 statistical family distributions.
 }
 \examples{
 \dontrun{
  data(iris)
  result <- preGroup(Species ~ ., data = iris, treatment_indicator = "Petal.Width")
- print(result)
+ result
 }
 
 }

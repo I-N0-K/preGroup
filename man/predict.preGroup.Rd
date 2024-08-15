@@ -4,14 +4,14 @@
 \alias{predict.preGroup}
 \title{Predict Responses Using preGroup Model}
 \usage{
-\method{predict}{preGroup}(preGroup_model, newdata, type = "response", ...)
+\method{predict}{preGroup}(object, newdata, type = "response", ...)
 }
 \arguments{
-\item{preGroup_model}{A \code{preGroup} model object from which predictions will be made.}
+\item{object}{A `preGroup` model object from which predictions will be made.}
 
 \item{newdata}{New data on which predictions are to be made.}
 
-\item{type}{The type of prediction to be made: 'response' or 'HTE'. Type 'response' returns the predicted
+\item{type}{The type of prediction to be made: 'response' or 'HTE'. Type 'response' returns the predicted 
 response values, while 'HTE' returns the heterogeneous treatment effects (for causal modelling).}
 
 \item{...}{Additional arguments passed to or from other methods.}
@@ -20,14 +20,18 @@ response values, while 'HTE' returns the heterogeneous treatment effects (for ca
 A vector of predicted responses.
 }
 \description{
-Predicts responses based on a \code{preGroup} model and new data.
+Predicts responses based on a `preGroup` model and new data.
 }
 \details{
-The function checks if the model object is a \code{preGroup} and then uses the
-\code{get_new_X} function to transform new data into the model matrix format. Predictions
-are then made using the multivariate structure of the \code{preGroup} model.
+The function checks if the model object is a `preGroup` and then uses the
+`get_new_X` function to transform new data into the model matrix format. Predictions
+are then made using the multivariate structure of the `preGroup` model.
 }
 \examples{
 # Assuming `model` is a preGroup model and `new_data` is available
-predictions <- predict.preGroup(model, new_data)
+\dontrun{
+mod <- preGroup(Species ~ ., data = iris, treatment_indicator = "Petal.Width")
+new_data <- iris[1:5, ]
+predictions <- predict(mod, new_data)
+}
 }

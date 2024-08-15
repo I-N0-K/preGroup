@@ -9,19 +9,21 @@ Description: Generate prediction rule ensembles that select variables at
     the group levels: linear, prognostic (rules that do not include
     treatment indicator), and prescriptive (rules which include treatment
     indicator).
+License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
+    license
 Encoding: UTF-8
-Roxygen: list(markdown = TRUE)
+Licence: FALSE
+Roxygen: TRUE
 RoxygenNote: 7.3.1
 Imports: 
+    Formula,
+    MatrixModels,
     mvs,
-    pre
+    pre,
+    survival
 Suggests: 
     ggplot2,
     knitr,
     rmarkdown,
     testthat
-Depends:
-    Formula,
-    survival,
-    MatrixModels
 VignetteBuilder: knitr

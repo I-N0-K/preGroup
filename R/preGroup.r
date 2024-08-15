@@ -184,6 +184,15 @@ make_group_id <- function(pre_model, treatment_indicator) {
 
 }
 
+# Helper function to extract alphas from alpha.mvs
+extract_numeric_vector <- function(str) {
+  # Remove 'c(' and ')'
+  str <- gsub("^c\\(|\\)$", "", str)
+  # Convert to numeric
+  numeric_vector <- as.numeric(str[2:3])
+  return(numeric_vector)
+}
+
 #' Summarize a preGroup Model
 #'
 #' @description
@@ -205,16 +214,16 @@ summary.preGroup <- function(object) {
     model_formals <- formals(preGroup)
 
     # Extract parameters from the call or use default values from formals
-    tree_unbiased <- if (!is.null(model_call$tree_unbiased)) {
-        eval(model_call$tree_unbiased)
+    tree_unbiased <- if (!is.null(model_call$tree.unbiased)) {
+        eval(model_call$tree.unbiased)
     } else {
-        model_formals$tree_unbiased
+        model_formals$tree.unbiased
     }
 
-    use_grad <- if (!is.null(model_call$use_grad)) {
-        eval(model_call$use_grad)
+    use_grad <- if (!is.null(model_call$use.grad)) {
+        eval(model_call$use.grad)
     } else {
-        model_formals$use_grad
+        model_formals$use.grad
     }
 
     alpha_mvs <- if (!is.null(model_call$alpha.mvs)) {
@@ -223,6 +232,7 @@ summary.preGroup <- function(object) {
         model_formals$alpha.mvs
     }
 
+    alpha_mvs <- extract_numeric_vector(as.character(alpha_mvs))
     # Extract coefficients data frame
     coefficients_df <- coef(preGroup_model)
 
@@ -245,31 +255,39 @@ summary.preGroup <- function(object) {
         prescriptive_nonzero <- 0
     }
 
-    # Determine the tree generating algorithm
-    tree_algorithm <- if (tree_unbiased) {
+    # Determine the tree generating algorithm and type
+    tree_algorithm <- if (!is.null(use_grad) && !use_grad) {
+        "GLM Trees"
+    } else if (!is.null(tree_unbiased) && tree_unbiased) {
         "Conditional Inference Trees"
     } else {
         "Recursive Partitioning Trees"
     }
 
-    # Determine the variable selection algorithm
-    variable_selection_algorithm <- if (all(alpha_mvs == c(0, 1))) {
-        "Ridge for individual feature selection, Lasso for grouped features selection"
-    } else if (all(alpha_mvs == c(1, 0))) {
-        "Lasso for individual feature selection, Ridge for grouped features selection"
+        # Check the first element of alpha_mvs
+    level1_algorithm <- if (alpha_mvs[1] == 0) {
+        "Ridge for individual feature selection."
+    } else if (alpha_mvs[1] == 1) {
+        "Lasso for individual feature selection."
     } else {
-        "Custom alpha.mvs values"
+        sprintf("Elastic net penalty for individual feature selection. Alpha: %f.", alpha_mvs[1])
     }
 
-    # Determine the tree type if use.grad is FALSE
-    if (!use_grad) {
-        tree_algorithm <- "GLM Trees"
+    # Check the second element of alpha_mvs
+    level2_algorithm <- if (alpha_mvs[2] == 1) {
+        "Lasso for grouped features selection."
+    } else if (alpha_mvs[2] == 0) {
+        "Ridge for grouped features selection."
+    } else {
+        sprintf("Elastic net penalty for grouped features selection. Alpha: %f.", alpha_mvs[2])
     }
 
     # Print the summary
     cat("Summary of preGroup Model:\n")
     cat("1. Tree Generating Algorithm:", tree_algorithm, "\n")
-    cat("2. Variable Selection Algorithm:", variable_selection_algorithm, "\n")
+    cat("2. Variable Selection Algorithm:", "\n")
+    cat("   - Level 1:", level1_algorithm, "\n")
+    cat("   - Level 2:", level2_algorithm, "\n")
     cat("3. Number of Nonzero Coefficients:\n")
     cat("   - Linear Predictors:", linear_nonzero, "\n")
     cat("   - Prognostic Predictors:", prognostic_nonzero, "\n")

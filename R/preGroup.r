@@ -199,7 +199,7 @@ extract_numeric_vector <- function(str) {
 #' Provides a summary of the preGroup model, including the tree generating algorithm, variable selection algorithm, and the number of nonzero coefficients for linear, prognostic, and prescriptive predictors.
 #'
 #' @param object An object of class 'preGroup'.
-#' @return A summary of the preGroup model.
+#' @return A summary list of the preGroup model. Can extract the the tree generating algorithm, variable selection algorithm. and number of nonzero coefficients
 #' @export
 summary.preGroup <- function(object) {
 
@@ -292,6 +292,19 @@ summary.preGroup <- function(object) {
     cat("   - Linear Predictors:", linear_nonzero, "\n")
     cat("   - Prognostic Predictors:", prognostic_nonzero, "\n")
     cat("   - Prescriptive Predictors:", prescriptive_nonzero, "\n")
+
+        # Create a summary list
+    summary_list <- list(
+        tree_generating_algorithm = tree_algorithm,
+        level_1_algorithm = level1_algorithm,
+        level_2_algorithm = level2_algorithm,
+        n_linear_nonzero = linear_nonzero,
+        n_prognostic_nonzero = prognostic_nonzero,
+        n_prescriptive_nonzero = prescriptive_nonzero
+    )
+
+    # Return the summary list
+    return(summary_list)
 }
 
 # print.preGroup <- function(preGroup_model) {

@@ -10,7 +10,7 @@
 \item{object}{An object of class 'preGroup'.}
 }
 \value{
-A summary of the preGroup model.
+A summary list of the preGroup model. Can extract the the tree generating algorithm, variable selection algorithm. and number of nonzero coefficients
 }
 \description{
 Provides a summary of the preGroup model, including the tree generating algorithm, variable selection algorithm, and the number of nonzero coefficients for linear, prognostic, and prescriptive predictors.

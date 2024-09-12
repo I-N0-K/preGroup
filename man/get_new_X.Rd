@@ -7,7 +7,7 @@
 get_new_X(preGroup_model, new_data)
 }
 \arguments{
-\item{preGroup_model}{A `preGroup` model object, specifically its `pre_fit` component.}
+\item{preGroup_model}{A \code{preGroup} model object, specifically its \code{pre_fit} component.}
 
 \item{new_data}{New data to be transformed into model matrix format.}
 }
@@ -15,12 +15,12 @@ get_new_X(preGroup_model, new_data)
 A list containing the transformed new data as a model matrix.
 }
 \description{
-This function processes new data to fit the structure of a `preGroup` model,
+This function processes new data to fit the structure of a \code{preGroup} model,
 facilitating the prediction process.
 }
 \details{
-The function retrieves settings and parameters from the `pre_fit` component of
-the `preGroup` model and applies these to the new data to generate a suitable model matrix.
+The function retrieves settings and parameters from the \code{pre_fit} component of
+the \code{preGroup} model and applies these to the new data to generate a suitable model matrix.
 This involves applying transformation rules and handling different types of predictors as
 specified in the model.
 }

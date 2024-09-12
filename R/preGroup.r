@@ -80,7 +80,7 @@ preGroup <- function(formula, data, treatment_indicator, alpha.mvs = c(0,1), fam
     # Convert chacracter variables to factor to fix issues like:
     # Error in inum.default(x, nmax = nmax, ...) : 
     # cannot handle objects of class ‘character’
-    data <- data.frame(data, stringsAsFactors = TRUE)
+    data <- data.frame(lapply(data, function(x) if (is.character(x)) as.factor(x) else x))
 
     if(length(levels(data[ ,treatment_indicator])) != 2) {
         stop("The treatment_indicator must have only 2 levels.")

@@ -17,5 +17,5 @@ Generates a matrix of importances for each variable based on the importances cal
 for models with a single response variable.
 }
 \details{
-This function
+This function only supports univariate outcome. Multivariate version needs to be further implemented.
 }

@@ -1,19 +1,14 @@
 Package: preGroup
-Title: Prediction rule ensembles with group level variable selection
+Title: What the Package Does (One Line, Title Case)
 Version: 0.0.0.9000
-Authors@R: c(
-    person("Kaiwen", "Liu", , "k.liu.8@umail.leidenuniv.nl", role = c("aut", "cre")),
-    person("Marjolein", "Fokkema", , "m.fokkema@fsw.leidenuniv.nl", role = "aut")
-  )
-Description: Generate prediction rule ensembles that select variables at
-    the group levels: linear, prognostic (rules that do not include
-    treatment indicator), and prescriptive (rules which include treatment
-    indicator).
+Authors@R: 
+    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
+           comment = c(ORCID = "YOUR-ORCID-ID"))
+Description: What the package does (one paragraph).
 License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
     license
 Encoding: UTF-8
-Licence: FALSE
-Roxygen: TRUE
+Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.1
 Imports: 
     Formula,

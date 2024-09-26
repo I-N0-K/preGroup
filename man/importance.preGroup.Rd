@@ -64,7 +64,7 @@
 A list containing the variable importances as data frames.
 }
 \description{
-Computes variable importances based on a preGroup model, offering options for both global and local importance, 
+Computes variable importances based on a preGroup model, offering options for both global and local importance,
 standardization of importances, and various additional parameters.
 }
 \examples{

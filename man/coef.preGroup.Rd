@@ -7,7 +7,7 @@
 \method{coef}{preGroup}(object, ...)
 }
 \arguments{
-\item{object}{A model object, which must be of class `preGroup`.}
+\item{object}{A model object, which must be of class \code{preGroup}.}
 
 \item{...}{Additional arguments passed to or from other methods.}
 }
@@ -15,14 +15,14 @@
 A data frame of combined coefficients and descriptions, sorted with respect to origin.
 }
 \description{
-This function calculates the aggregated coefficients for a `preGroup` model,
+This function calculates the aggregated coefficients for a \code{preGroup} model,
 combining intercepts and coefficients from different hierarchical levels.
 }
 \details{
 The function first verifies the class of the model, then extracts and processes
 coefficients from multiple levels of the model to compute the grand intercept and other
 subgroup coefficients. It finally merges these results with the rule descriptions from
-the `pre_fit` component of the model, handles missing descriptions, and sorts the resulting data frame.
+the \code{pre_fit} component of the model, handles missing descriptions, and sorts the resulting data frame.
 }
 \examples{
 # Assuming `model` is a preGroup model

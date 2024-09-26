@@ -89,12 +89,24 @@ preGroup <- function(formula, data, treatment_indicator, alpha.mvs = c(0,1), fam
     # Extract variable names from the formula
     formula_vars <- all.vars(formula)
 
+    if(family %in% c("binomial", "Binomial")) {
+
+      data[ , formula_vars[1]] <- as.factor(data[ , formula_vars[1]])
+
+      if(length(levels(data[ , formula_vars[1]])) != 2) {
+        stop("The response variable must have only 2 levels for binomial family.")
+      }
+
+      message("The family is binomial but the response is not binary factor. It will be converted to a binary factor.")
+    }
+
     # Check if treatment indicator is in the formula
     if (!(treatment_indicator %in% formula_vars)) {
         message("Treatment indicator is not included in the formula. It will be automatically added to the formula to fit the preGroup model.")
         # Modify the formula to include the treatment indicator
         formula <- as.formula(paste(deparse(formula), "+", treatment_indicator))
     }
+
 
     # fit the pre funtion, fit.final = FALSE
     pre_fit <- pre(formula = formula, data = data, fit.final = FALSE, family = family, ad.alpha = ad.alpha, 
@@ -446,11 +458,13 @@ predict.preGroup <- function(object, newdata, type = "response", ...) {
 
     preGroup_model <- object
 
+    new_x <- get_new_X(preGroup_model, newdata)
+
     # Process prediction based on type
-    if (type == "response") {
-        new_x <- get_new_X(preGroup_model, newdata)
+    if (type  %in% c("response", "Response", "RESPONSE")) {
         return(predict(preGroup_model$mvs_fit, new_x, predtype = "response", cvlambda = "lambda.min"))
-    } else {
+
+    } else if (type %in% c("HTE", "hte", "Hte")) {
         # Avoid repeating predictions by computing them once
         return(calculate_hte(preGroup_model, newdata))
     }
@@ -483,8 +497,20 @@ calculate_hte <- function(preGroup_model, newdata) {
     # print("starting HTE calculation")
 
     # Calculate HTE
-    hte <- predict(preGroup_model, newdata = newdata_g1, type = "response") - 
-           predict(preGroup_model, newdata = newdata_g2, type = "response")
+    if (preGroup_model$call$family %in% c("binomial", "Binomial")) {
+
+      # Obtain probabilities for each group in binomial family
+      p1 <- predict(preGroup_model, newdata = newdata_g1, type = "response")
+      p2 <- predict(preGroup_model, newdata = newdata_g2, type = "response")
+
+      # Use odds ratio: treatment vs control as HTE for binomial family
+      hte <- (p1/(1 - p1)) / (p2/(1 - p2))
+
+    } else {
+      hte <- predict(preGroup_model, newdata = newdata_g1, type = "response") - 
+             predict(preGroup_model, newdata = newdata_g2, type = "response")
+    }
+
     return(hte)
 }
 

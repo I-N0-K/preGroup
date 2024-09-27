@@ -13,7 +13,7 @@
 #' @param alpha.mvs a dummay vector of length two, indicating the alpha values used
 #' within  and between group penalization. A value of 1 yields lasso, a value of 0 ridge, a value
 #' between 0 and 1 elastic net. The default uses ridge for feature selection and lasso
-#' for group selection. 
+#' for group selection.
 #' @param family a description of the error distribution to be used in the model. It can be one 
 #'        of 'gaussian', 'binomial', etc.
 #' @param ad.alpha optional alpha parameter for adjustment.
@@ -485,11 +485,14 @@ coef.preTreatment <- function(object, ...) {
 #' @param type The type of prediction to be made: 'response' or 'HTE'. Type 'response' returns the predicted 
 #' response values, while 'HTE' returns the heterogeneous treatment effects (for causal modelling).
 #' For gaussian outcome, the predicted result is on the original scale of the response variable. 
-#' For binomial outcome, the predicted result is the p(Y = 1|Xs) for type "response" and the 
-#' odds ratio of the treatment condition against the control condition for type "HTE":
-#' p1 = p(Y = 1|Treatment, Xs)
-#' p2 = p(Y = 1|Control, Xs)
+#' For binomial outcome, the predicted result is the p(Y = 1|Xs) for type "response". The probability can then be manually converte into a binary outcome 
+#' by users. 
+#' For binomial outcome, the predicted result is the odds ratio of the treatment condition against the control condition for type "HTE":
+#' p1 = p(Y = 1|Treatment, Xs),
+#' p2 = p(Y = 1|Control, Xs),
 #' Odds ratio = (p1 / (1-p1)) / (p2 / (1 - p2)).
+#' @param return_binary_p Logical, indicating whether to return binary probabilities for binomial outcomes. Default is FALSE (returns binary outcomes).
+#' @param binary_threshold The threshold for converting probabilities to binary outcomes. Default is 0.5.
 #' @param ... Additional arguments passed to or from other methods.
 #' @return A vector of predicted responses.
 #' @details The function checks if the model object is a `preTreatment` and then uses the
@@ -499,14 +502,46 @@ coef.preTreatment <- function(object, ...) {
 #' @importFrom mvs predict.MVS
 #' @export
 #' @examples
-#' # Assuming `model` is a preTreatment model and `new_data` is available
-#' \dontrun{
-#' mod <- preTreatment(Species ~ ., data = iris, treatment_indicator = "Petal.Width")
-#' new_data <- iris[1:5, ]
-#' predictions <- predict(mod, new_data)
-#' }
+#' set.seed(123)  # For reproducibility
+#' # Number of rows
+#' n <- 200
+#' 
+#' # Generate 5 binary variables
+#' binary_vars <- as.data.frame(replicate(5, sample(0:1, n, replace = TRUE)))
+#' names(binary_vars) <- paste0("X", 1:5)
+#' 
+#' # Generate 10 categorical variables with 3 levels each
+#' categorical_vars <- as.data.frame(replicate(10, sample(letters[1:3], n, replace = TRUE)))
+#' names(categorical_vars) <- paste0("X", 6:15)
+#' 
+#' # Generate 10 continuous variables
+#' continuous_vars <- as.data.frame(replicate(10, rnorm(n)))
+#' names(continuous_vars) <- paste0("X", 16:25)
 
-predict.preTreatment <- function(object, newdata, type = "response", ...) {
+#' # Combine all predictor variables
+#' predictors <- cbind(binary_vars, categorical_vars, continuous_vars)
+
+# # Create a non-linear relationship for the response variable y
+# # For simplicity, we'll use a combination of sine, cosine, and polynomial terms
+#' y <- with(predictors, {
+#'   2 * sin(X16) + 3 * cos(X17) + X1 * X18^2 - X2 * X19 + X3 * X20^3 +
+#'     as.numeric(X1 == 1 & X9 == "b") + as.numeric(X1 == 1 & X16 < 0) +
+#'     as.numeric(X6 == "a") * X21 + as.numeric(X7 == "b") * X22 +
+#'     as.numeric(X8 == "c") * X23 +
+#'     25 * as.numeric(X8 == "c") + 2 * as.numeric(X9 == "b") + X16 + X18 + X19 + rnorm(n)  # Adding some noise
+#' })
+
+#' #Combine predictors and response into a single data frame
+#' simdata1 <- data.frame(y = y, predictors)
+#' 
+#' result <- preTreatment(y ~ ., treatment_indicator = "X1", data = simdata1, alpha.mvs = c(0,1))
+#' 
+#' newdata1 <- data.frame(y = y + rnorm(n), predictors + rnorm(n) + 2sin(X16) + 3cos(X17) + X1 * X18^2 - X2 * X19 + X3 * X20^3)
+#' 
+#' pred_response <- predict(result, newdata1, type = "response")
+#' pred_hte <- predict(result, newdata1, type = "HTE")
+
+predict.preTreatment <- function(object, newdata, type = "response", binary_threshold = 0.5, return_binary_p = TRUE,...) {
     # Validate model class
     if (!inherits(object, "preTreatment")) {
         stop("The model must belong to class 'preTreatment'.")
@@ -518,13 +553,29 @@ predict.preTreatment <- function(object, newdata, type = "response", ...) {
         stop("type must be one of 'response', 'HTE'.")
     }
 
+    if(binary_threshold <= 0 || binary_threshold >= 1) {
+        stop("The binary_threshold must be between 0 and 1.")
+    }
+
     preTreatment_model <- object
 
     new_x <- get_new_X(preTreatment_model, newdata)
 
     # Process prediction based on type
     if (type  %in% c("response", "Response", "RESPONSE")) {
-        return(predict(preTreatment_model$mvs_fit, new_x, predtype = "response", cvlambda = "lambda.min"))
+
+      if(preTreatment_model$call$family %in% c("binomial", "Binomial")) {
+        # Obtain probabilities for binomial family
+        p <- predict(preTreatment_model$mvs_fit, new_x, predtype = "response", cvlambda = "lambda.min")
+
+        if (return_binary_p) {
+          return(ifelse(p > binary_threshold, 1, 0))
+        } else {
+          return(p)
+        }
+      } else {
+          return(predict(preTreatment_model$mvs_fit, new_x, predtype = "response", cvlambda = "lambda.min"))
+      }
 
     } else if (type %in% c("HTE", "hte", "Hte")) {
         # Avoid repeating predictions by computing them once
@@ -621,7 +672,6 @@ calculate_hte_pre <- function(pre_model, newdata, treatment_indicator) {
 #' the `preTreatment` model and applies these to the new data to generate a suitable model matrix.
 #' This involves applying transformation rules and handling different types of predictors as
 #' specified in the model.
-#' @export
 # ' @method get_new_X preTreatment
 #' @examples
 #' # Assuming `model` is a preTreatment model and `new_data` is ready
@@ -913,7 +963,45 @@ importance <- function(x, ...)  UseMethod("importance")
 #' @export
 #' @aliases importance
 #' @examples
-#' result <- importance(preTreatment_model)
+#' set.seed(123)  # For reproducibility
+#' # Number of rows
+#' n <- 200
+#' 
+#' # Generate 5 binary variables
+#' binary_vars <- as.data.frame(replicate(5, sample(0:1, n, replace = TRUE)))
+#' names(binary_vars) <- paste0("X", 1:5)
+#' 
+#' # Generate 10 categorical variables with 3 levels each
+#' categorical_vars <- as.data.frame(replicate(10, sample(letters[1:3], n, replace = TRUE)))
+#' names(categorical_vars) <- paste0("X", 6:15)
+#' 
+#' # Generate 10 continuous variables
+#' continuous_vars <- as.data.frame(replicate(10, rnorm(n)))
+#' names(continuous_vars) <- paste0("X", 16:25)
+
+#' # Combine all predictor variables
+#' predictors <- cbind(binary_vars, categorical_vars, continuous_vars)
+
+# # Create a non-linear relationship for the response variable y
+# # For simplicity, we'll use a combination of sine, cosine, and polynomial terms
+#' y <- with(predictors, {
+#'   2 * sin(X16) + 3 * cos(X17) + X1 * X18^2 - X2 * X19 + X3 * X20^3 +
+#'     as.numeric(X1 == 1 & X9 == "b") + as.numeric(X1 == 1 & X16 < 0) +
+#'     as.numeric(X6 == "a") * X21 + as.numeric(X7 == "b") * X22 +
+#'     as.numeric(X8 == "c") * X23 +
+#'     25 * as.numeric(X8 == "c") + 2 * as.numeric(X9 == "b") + X16 + X18 + X19 + rnorm(n)  # Adding some noise
+#' })
+
+#' #Combine predictors and response into a single data frame
+#' simdata1 <- data.frame(y = y, predictors)
+#' 
+#' result <- preTreatment(y ~ ., treatment_indicator = "X1", data = simdata1, alpha.mvs = c(0,1))
+#' 
+#' # Automatically plot the variable importaces
+#' imp <- importance(result)
+#' 
+#' #Importances are stored in a data frame for customized plots if needed by users
+#' imp
 
 importance.preTreatment <- function(preTreatment_model, standardize = FALSE, global = TRUE,
                            penalty.par.val = "lambda.1se", gamma = NULL,
